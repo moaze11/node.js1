@@ -1,0 +1,60 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Role {
+  id        Int     @id @default(autoincrement())
+  name      String  @unique
+  users     User[]
+}
+
+model User {
+  id              Int     @id @default(autoincrement())
+  email           String  @unique
+  password        String
+  roleId          Int
+  role            Role    @relation(fields: [roleId], references: [id])
+  isActive        Boolean @default(true)
+  emailVerified   Boolean @default(false)
+  refreshTokens   RefreshToken[]
+  invitations     Invitation[]
+  passwordResets  PasswordReset[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model RefreshToken {
+  id        Int     @id @default(autoincrement())
+  token     String  @unique
+  userId    Int
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+}
+
+model Invitation {
+  id        Int     @id @default(autoincrement())
+  token     String  @unique
+  email     String  @unique
+  userId    Int?
+  user      User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  expiresAt DateTime
+  acceptedAt DateTime?
+  createdAt DateTime @default(now())
+}
+
+model PasswordReset {
+  id        Int     @id @default(autoincrement())
+  token     String  @unique
+  userId    Int
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+}
