@@ -16,12 +16,13 @@ import {
   requireAdmin,
   requireAgent
 } from '../middlewares/auth.middleware';
+import { loginRateLimit } from '../middlewares/rateLimit';
 
 const router = Router();
 
 // Auth Routes
 router.post('/auth/super-admin', createSuperAdmin);
-router.post('/auth/login', login);
+router.post('/auth/login', loginRateLimit, login);
 router.post('/auth/refresh', refreshToken);
 router.post('/auth/logout', logout);
 
