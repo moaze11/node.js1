@@ -1,8 +1,7 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { generateToken, TOKEN_EXPIRY, getExpiryDate } from './tokenUtils';
-import { sendInvitationEmail, sendPasswordResetEmail } from './emailService';
-import { hashPassword, comparePassword } from './utils';
+import { generateToken, TOKEN_EXPIRY, getExpiryDate, hashPassword, comparePassword } from '../utils';
+import { sendInvitationEmail, sendPasswordResetEmail } from '../services/email.service';
 
 const prisma = new PrismaClient();
 

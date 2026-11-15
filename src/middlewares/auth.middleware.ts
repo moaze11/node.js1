@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { verifyAccessToken } from './utils';
+import { verifyAccessToken } from '../utils';
 
 // Interface pour enrichir Request
 declare global {

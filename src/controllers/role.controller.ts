@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { hashPassword } from './utils';
+import { hashPassword } from '../utils';
 
 const prisma = new PrismaClient();
 

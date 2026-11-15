@@ -1,56 +1,39 @@
 import express from 'express';
-import { createSuperAdmin, login, refreshToken, logout } from './authController';
-import { inviteUser, acceptInvitation, forgotPassword, resetPassword } from './emailController';
-import {
-  createUserAsSuperAdmin,
-  assignRole,
-  toggleUserStatus,
-  listAllUsers,
-  viewTickets,
-  getMyProfile,
-  getRoles
-} from './roleController';
-import {
-  authMiddleware,
-  requireSuperAdmin,
-  requireAdmin,
-  requireAgent
-} from './middleware';
+import { PrismaClient } from '@prisma/client';
+import routes from './routes';
 
 const app = express();
+const prisma = new PrismaClient();
+
 app.use(express.json());
 
-// ========== PUBLIC ROUTES (No Auth) ==========
-// Auth Routes
-app.post('/auth/super-admin', createSuperAdmin);
-app.post('/auth/login', login);
-app.post('/auth/refresh', refreshToken);
-app.post('/auth/logout', logout);
+// Seed roles
+async function seedRoles() {
+  const roles = [
+    { name: 'SuperAdmin' },
+    { name: 'Admin' },
+    { name: 'Agent' },
+    { name: 'User' }
+  ];
 
-// Email Routes
-app.post('/auth/invite', inviteUser);
-app.post('/auth/accept-invitation', acceptInvitation);
-app.post('/auth/forgot-password', forgotPassword);
-app.post('/auth/reset-password', resetPassword);
+  for (const role of roles) {
+    await prisma.role.upsert({
+      where: { name: role.name },
+      update: {},
+      create: role
+    });
+  }
+}
 
-// ========== PROTECTED ROUTES (Auth + RBAC) ==========
+seedRoles().catch(console.error);
 
-// User Routes (Authenticated)
-app.get('/user/profile', authMiddleware, getMyProfile);
-app.get('/user/roles', authMiddleware, getRoles);
+// Routes
+app.use(routes);
 
-// SuperAdmin Routes
-app.post('/admin/users', authMiddleware, requireSuperAdmin, createUserAsSuperAdmin);
-app.patch('/admin/users/:id/role', authMiddleware, requireSuperAdmin, assignRole);
-app.patch('/admin/users/:id/status', authMiddleware, requireSuperAdmin, toggleUserStatus);
-
-// Admin Routes
-app.get('/admin/users', authMiddleware, requireAdmin, listAllUsers);
-
-// Agent Routes
-app.get('/agent/tickets', authMiddleware, requireAgent, viewTickets);
-
-const PORT = process.env.PORT || 3001;
+// Start server
+const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
   console.log(`✅ Auth API running on http://localhost:${PORT}`);
 });
+
+export default app;
