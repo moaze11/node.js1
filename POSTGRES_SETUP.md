@@ -30,14 +30,15 @@ createdb auth_db
 
 ### 2️⃣ Mettre à jour `.env`
 
+Ne changer que `DATABASE_URL` ; les autres variables restent celles de `.env.example`.
+
 ```
 DATABASE_URL="postgresql://postgres:password@localhost:5432/auth_db"
-JWT_SECRET="your-secret-key"
-JWT_REFRESH_SECRET="your-refresh-secret"
-PORT=3002
 ```
 
-⚠️ Remplacer `password` par le vrai mot de passe PostgreSQL
+⚠️ Remplacer `password` par le vrai mot de passe PostgreSQL.
+Rappel : `JWT_SECRET` et `JWT_REFRESH_SECRET` doivent faire au moins 32 caractères (`openssl rand -hex 32`),
+sinon le serveur refuse de démarrer.
 
 ### 3️⃣ Modifier `prisma/schema.prisma`
 
@@ -45,7 +46,7 @@ Changer le provider de SQLite à PostgreSQL :
 
 ```prisma
 datasource db {
-  provider = "postgresql"  # Était "sqlite"
+  provider = "postgresql"  // Était "sqlite"
   url      = env("DATABASE_URL")
 }
 ```

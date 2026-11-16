@@ -1,30 +1,24 @@
-# 📋 HANDOFF — Guide pour reprendre le projet
+# HANDOFF — Reprendre le projet
 
-## Prérequis
+Vue d'ensemble, endpoints et architecture : voir **README.md**. Ce fichier donne la mise en route
+et un scénario de test complet, étape par étape.
 
-- Node.js v18+ : https://nodejs.org/
-- npm (livré avec Node)
-- (Optional) PostgreSQL : voir POSTGRES_SETUP.md
-
-## Installation & Lancement
+## Mise en route
 
 ```bash
-# 1. Installer les dépendances
-npm install
-
-# 2. Lancer le serveur (watch mode)
-npm run dev
-
-# 3. Compiler TypeScript (si besoin)
-npm run build
-npm start
+nvm use 20                   # obligatoire : Prisma ne fonctionne pas sous Node 26
+npm ci
+cp .env.example .env         # remplir JWT_SECRET, JWT_REFRESH_SECRET (openssl rand -hex 32),
+                             # RESEND_API_KEY, OPENAI_API_KEY
+npx prisma migrate deploy
+npm run dev                  # http://localhost:3002 — Swagger : /api-docs
 ```
 
-**Server démarre sur** : `http://localhost:3002`
+Vérifier : `npm test` doit afficher 117 tests réussis.
 
-## Workflow typique
+## Scénario complet (curl)
 
-### 1️⃣ Créer un SuperAdmin (une fois)
+### 1. Créer le SuperAdmin (une seule fois, base vide)
 
 ```bash
 curl -X POST http://localhost:3002/auth/super-admin \
@@ -32,16 +26,10 @@ curl -X POST http://localhost:3002/auth/super-admin \
   -d '{"email": "admin@example.com", "password": "SecurePass123"}'
 ```
 
-**Réponse** :
-```json
-{
-  "accessToken": "eyJhbGc...",
-  "refreshToken": "eyJhbGc...",
-  "user": { "id": 1, "email": "admin@example.com", "role": "SuperAdmin" }
-}
-```
+Refusé si un SuperAdmin existe déjà. En production (`NODE_ENV=production`), il faut en plus
+`ALLOW_SUPERADMIN_BOOTSTRAP=true` le temps du premier déploiement.
 
-### 2️⃣ Login
+### 2. Se connecter
 
 ```bash
 curl -X POST http://localhost:3002/auth/login \
@@ -49,134 +37,126 @@ curl -X POST http://localhost:3002/auth/login \
   -d '{"email": "admin@example.com", "password": "SecurePass123"}'
 ```
 
-**Sauvegarder le token** : `SUPER_ADMIN_TOKEN="eyJhbGc..."`
+Réponse : `accessToken` (15 min), `refreshToken` (7 jours), `user`. Garder le token :
+`ADMIN_TOKEN="eyJ..."`
 
-### 3️⃣ SuperAdmin crée un autre user
+### 3. Créer un compte directement (SuperAdmin)
 
 ```bash
 curl -X POST http://localhost:3002/admin/users \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $SUPER_ADMIN_TOKEN" \
-  -d '{"email": "admin2@example.com", "password": "SecurePass123", "roleId": 2}'
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"email": "agent@example.com", "password": "SecurePass123", "roleId": 3}'
 ```
 
-(roleId: 1=SuperAdmin, 2=Admin, 3=Agent, 4=User)
+`roleId` : voir `GET /user/roles` (SuperAdmin, Admin, Agent, User). Mot de passe : 8 caractères minimum.
 
-### 4️⃣ Inviter un user (sans créer manuellement)
+### 4. Inviter quelqu'un (Admin ou SuperAdmin)
 
 ```bash
 curl -X POST http://localhost:3002/auth/invite \
   -H "Content-Type: application/json" \
-  -d '{"email": "newuser@example.com"}'
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"email": "client@example.com"}'
 ```
 
-**Récupérer le token** de la réponse, puis user l'accepte :
+Le token d'invitation part **uniquement par email** (il n'est pas dans la réponse, par sécurité).
+En dev, avec une clé Resend de test, l'email n'arrive qu'à l'adresse du compte Resend : récupérer le token
+dans la table `Invitation` avec `npx prisma studio`. Puis :
 
 ```bash
 curl -X POST http://localhost:3002/auth/accept-invitation \
   -H "Content-Type: application/json" \
-  -d '{"token": "e9baa1ee5a3e...", "password": "UserPass123"}'
+  -d '{"token": "<token>", "password": "ClientPass123"}'
 ```
 
-### 5️⃣ User oublie son password
+### 5. Créer un ticket (déclenche le triage IA)
+
+```bash
+curl -X POST http://localhost:3002/tickets \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" \
+  -d '{"title": "Impossible de me connecter", "description": "Erreur 500 au login"}'
+```
+
+Réponse : le ticket (statut, priorité, catégorie fixés par l'IA) et `aiReply` (la réponse de l'IA,
+ou `null` si l'IA est indisponible).
+
+### 6. Suivre et répondre
+
+```bash
+# Lister ses tickets (filtres, tri, pagination)
+curl "http://localhost:3002/tickets?status=open&sortBy=createdAt&order=desc&page=1&limit=20" \
+  -H "Authorization: Bearer $CLIENT_TOKEN"
+
+# Lire le fil d'un ticket
+curl http://localhost:3002/tickets/1/messages -H "Authorization: Bearer $CLIENT_TOKEN"
+
+# Répondre (rouvre le ticket s'il était fermé)
+curl -X POST http://localhost:3002/tickets/1/messages \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" \
+  -d '{"content": "Toujours bloqué"}'
+```
+
+### 7. Côté agent
+
+```bash
+# S'assigner le ticket et le passer en cours
+curl -X PATCH http://localhost:3002/tickets/1 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -d '{"assigneeId": <id de l agent>, "status": "in_progress"}'
+```
+
+### 8. Mot de passe oublié
 
 ```bash
 curl -X POST http://localhost:3002/auth/forgot-password \
   -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com"}'
-```
-
-**Récupérer le reset token** de la console, puis reset :
-
-```bash
+  -d '{"email": "client@example.com"}'
+# token reçu par email (ou table PasswordReset dans prisma studio), valable 1 h, une seule fois :
 curl -X POST http://localhost:3002/auth/reset-password \
   -H "Content-Type: application/json" \
-  -d '{"token": "fe3bf6bd...", "password": "NewPass456"}'
+  -d '{"token": "<token>", "password": "NewPass456!"}'
 ```
 
-### 6️⃣ Accéder à une route protégée
+### 9. Administration
 
 ```bash
-# Get own profile
-curl -X GET http://localhost:3002/user/profile \
-  -H "Authorization: Bearer $USER_TOKEN"
+# Changer un rôle (audité)
+curl -X PATCH http://localhost:3002/admin/users/3/role \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"roleId": 2}'
 
-# Admin liste les users
-curl -X GET http://localhost:3002/admin/users \
-  -H "Authorization: Bearer $ADMIN_TOKEN"
+# Désactiver un compte (audité, sessions coupées immédiatement)
+curl -X PATCH http://localhost:3002/admin/users/3/status \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"isActive": false}'
 
-# Agent voit les tickets
-curl -X GET http://localhost:3002/agent/tickets \
-  -H "Authorization: Bearer $AGENT_TOKEN"
-```
-
-## Fichiers clés
-
-| Fichier | Rôle |
-|---------|------|
-| `src/index.ts` | Routes + serveur |
-| `src/middleware.ts` | Auth + RBAC |
-| `src/authController.ts` | Login, tokens |
-| `src/emailController.ts` | Invitations, reset password |
-| `src/roleController.ts` | Endpoints protégés |
-| `prisma/schema.prisma` | Modèles DB |
-| `.env` | Config (PORT, JWT_SECRET) |
-
-## Base de données
-
-### Modèles
-
-1. **User** - email, password (hashé), role, isActive
-2. **Role** - SuperAdmin, Admin, Agent, User
-3. **RefreshToken** - tokens de renouvellement (révocables)
-4. **Invitation** - tokens single-use pour invitations (7 jours)
-5. **PasswordReset** - tokens single-use pour reset (1 heure)
-
-### Voir la DB (SQLite)
-
-```bash
-# Ouvrir avec Prisma Studio
-npx prisma studio
-
-# Ou directement avec SQLite
-sqlite3 dev.db
-```
-
-## Environnement (.env)
-
-```
-DATABASE_URL="file:./dev.db"           # SQLite (dev)
-JWT_SECRET="your-secret-key"           # À changer en prod
-JWT_REFRESH_SECRET="your-refresh-secret"
-PORT=3002
-```
-
-**⚠️ En production** : Générer des secrets forts
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+# Lire les audit logs
+curl "http://localhost:3002/admin/audit-logs?action=ROLE_ASSIGNED" -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 ## Erreurs courantes
 
 | Erreur | Cause | Solution |
-|--------|-------|----------|
-| "Port 3002 already in use" | Autre process sur le port | `pkill -f "ts-node-dev"` |
-| "Invalid token" | Token expiré | Refaire un login |
-| "Only Admin can access" | Rôle insuffisant | Utiliser un token Admin+ |
-| "User not found" | Email n'existe pas | Créer ou inviter d'abord |
+|---|---|---|
+| `getPlatformInfo is not a function` (Prisma) | Node 26 / npm 11 | `nvm use 20`, puis `rm -rf node_modules && npm ci` |
+| `JWT_SECRET must be set and at least 32 characters long` | Secret absent ou trop court | Le générer : `openssl rand -hex 32` |
+| 401 `Account disabled or not found` | Compte désactivé ou supprimé | Le réactiver (SuperAdmin) |
+| 403 | Rôle insuffisant | Utiliser un compte avec le bon rôle |
+| 404 sur un ticket qui existe | Ticket d'un autre utilisateur | Normal : son existence n'est pas révélée |
+| 429 | Trop de requêtes (rate limit) | Attendre la fin de la fenêtre (en-tête `Retry-After`) |
+| Port 3002 occupé | Autre process | `lsof -i :3002` puis `kill <PID>` |
 
-## Améliorations futures
+## Limites connues
 
-- [ ] 2FA (Two-Factor Authentication)
-- [ ] OAuth (Google, GitHub)
-- [ ] Rate limiting
-- [ ] Audit logs
-- [ ] User permissions (finer-grained)
-- [ ] Email confirmation (EmailVerified)
-- [ ] API docs (Swagger)
+- Rate limit en mémoire : remis à zéro au redémarrage, non partagé entre plusieurs instances (Redis en production).
+- Tokens d'invitation et de reset stockés en clair en base (à hacher si la base devait être exposée).
+- Un futur front doit afficher les réponses de l'IA comme du texte, pas comme du HTML.
 
-## Support
+## ⚠️ Git
 
-- **Docs** : README.md
-- **PostgreSQL** : POSTGRES_SETUP.md
-- **Code** : Bien commenté, types TS complètes
+Le dépôt a pour racine le dossier personnel. Toujours ajouter les fichiers par chemin
+(`git add Desktop/nodjs1/auth-api`), **jamais** `git add .` ou `git add -A` depuis `~`.
