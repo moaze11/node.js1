@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../types/config';
 import { AppError } from '../middlewares/errorHandler';
 import { ListTicketsQuery, CreateTicketInput, UpdateTicketInput } from '../schemas/ticket.schema';
+import { triageTicket, statusForCategory } from './ai.service';
 
 export interface Actor {
   userId: number;
@@ -71,10 +72,62 @@ export async function listTickets(actor: Actor, query: ListTicketsQuery) {
   };
 }
 
+/**
+ * Crée le ticket puis le fait trier par l'IA (statut, priorité, catégorie + réponse dans le fil).
+ * Si l'IA est indisponible, le ticket est quand même créé, sans réponse IA.
+ */
 export async function createTicket(actor: Actor, input: CreateTicketInput) {
-  return prisma.ticket.create({
+  const ticket = await prisma.ticket.create({
     data: { ...input, ownerId: actor.userId },
   });
+
+  const triage = await triageTicket({ title: ticket.title, description: ticket.description });
+  if (!triage) return { ticket, aiReply: null };
+
+  const [updated, aiMessage] = await prisma.$transaction([
+    prisma.ticket.update({
+      where: { id: ticket.id },
+      data: {
+        status: statusForCategory(triage.category),
+        priority: triage.priority,
+        category: triage.category,
+      },
+    }),
+    prisma.ticketMessage.create({
+      data: { ticketId: ticket.id, authorId: null, authorType: 'ai', content: triage.reply },
+    }),
+  ]);
+
+  return { ticket: updated, aiReply: aiMessage };
+}
+
+export async function listMessages(actor: Actor, ticketId: number) {
+  await getTicket(actor, ticketId); // applique les règles d'accès (404 sinon)
+  return prisma.ticketMessage.findMany({
+    where: { ticketId },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
+/**
+ * Ajoute un message dans le fil. Peuvent écrire : le propriétaire du ticket,
+ * et le staff qui a le droit de le modifier (Agent assigné / non assigné, Admin, SuperAdmin).
+ * Si le propriétaire répond sur un ticket fermé, il est rouvert pour un agent.
+ */
+export async function addMessage(actor: Actor, ticketId: number, content: string) {
+  const ticket = await getTicket(actor, ticketId);
+  const isOwner = ticket.ownerId === actor.userId;
+  if (!isOwner && !canUpdateTicket(actor, ticket)) throw new AppError('Forbidden', 403);
+
+  const message = await prisma.ticketMessage.create({
+    data: { ticketId, authorId: actor.userId, authorType: isOwner ? 'user' : 'agent', content },
+  });
+
+  if (isOwner && ticket.status === 'closed') {
+    await prisma.ticket.update({ where: { id: ticketId }, data: { status: 'open' } });
+  }
+
+  return message;
 }
 
 export async function getTicket(actor: Actor, id: number) {

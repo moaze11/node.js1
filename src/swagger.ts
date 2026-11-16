@@ -320,8 +320,21 @@ const ticketSchema = {
     priority: { type: 'string', enum: ['low', 'medium', 'high'] },
     ownerId: { type: 'integer' },
     assigneeId: { type: 'integer', nullable: true },
+    category: { type: 'string', nullable: true, enum: ['technical', 'simple_question', 'off_topic'], description: 'Set by the AI triage' },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' }
+  }
+};
+
+const messageSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'integer' },
+    ticketId: { type: 'integer' },
+    authorId: { type: 'integer', nullable: true, description: 'null when the author is the AI' },
+    authorType: { type: 'string', enum: ['user', 'agent', 'ai'] },
+    content: { type: 'string' },
+    createdAt: { type: 'string', format: 'date-time' }
   }
 };
 
@@ -430,7 +443,26 @@ const extraEndpoints: Record<string, any> = {
           }
         }
       },
-      responses: { 201: { description: 'Ticket created' }, 400: validationError, 401: { description: 'Unauthorized' } }
+      responses: {
+        201: {
+          description:
+            'Ticket created, then triaged by the AI: technical → stays "open" for an agent; simple question (platform FAQ) → AI answers and "closed"; off-topic → "closed". The AI also sets the priority and posts its reply in the ticket thread (aiReply). If the AI is unavailable, the ticket is created without aiReply.',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  data: ticketSchema,
+                  aiReply: { ...messageSchema, nullable: true }
+                }
+              }
+            }
+          }
+        },
+        400: validationError,
+        401: { description: 'Unauthorized' },
+        429: { description: 'Too many tickets created (10 per hour per user)' }
+      }
     }
   },
   '/tickets/{id}': {
@@ -462,6 +494,29 @@ const extraEndpoints: Record<string, any> = {
         }
       },
       responses: { 200: { description: 'Ticket updated' }, 400: validationError, 403: { description: 'Forbidden' }, 404: { description: 'Not found' } }
+    }
+  },
+  '/tickets/{id}/messages': {
+    get: {
+      summary: 'Ticket thread (AI, user and agent messages); same access rules as the ticket',
+      tags: ['Tickets'],
+      security: bearer,
+      parameters: [idParam],
+      responses: {
+        200: { description: 'Messages', content: { 'application/json': { schema: { type: 'object', properties: { data: { type: 'array', items: messageSchema } } } } } },
+        404: { description: 'Not found' }
+      }
+    },
+    post: {
+      summary: 'Reply in the thread (ticket owner or staff allowed to update it). The owner replying on a closed ticket reopens it.',
+      tags: ['Tickets'],
+      security: bearer,
+      parameters: [idParam],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { type: 'object', required: ['content'], properties: { content: { type: 'string', minLength: 1, maxLength: 5000 } } } } }
+      },
+      responses: { 201: { description: 'Message added' }, 400: validationError, 403: { description: 'Forbidden' }, 404: { description: 'Not found' } }
     }
   },
   '/agent/tickets': { get: { ...listTicketsOp, summary: 'List tickets (Agent+ alias of GET /tickets)' } }

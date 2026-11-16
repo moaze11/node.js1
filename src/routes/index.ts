@@ -10,14 +10,21 @@ import {
   getMyProfile,
   getRoles
 } from '../controllers/role.controller';
-import { listTickets, createTicket, getTicket, updateTicket } from '../controllers/ticket.controller';
+import {
+  listTickets,
+  createTicket,
+  getTicket,
+  updateTicket,
+  listMessages,
+  addMessage
+} from '../controllers/ticket.controller';
 import {
   authMiddleware,
   requireSuperAdmin,
   requireAdmin,
   requireAgent
 } from '../middlewares/auth.middleware';
-import { loginRateLimit, sensitiveRateLimit } from '../middlewares/rateLimit';
+import { loginRateLimit, sensitiveRateLimit, ticketCreateRateLimit } from '../middlewares/rateLimit';
 import { validate } from '../middlewares/validate';
 import { asyncHandler } from '../middlewares/errorHandler';
 import {
@@ -34,6 +41,7 @@ import {
   UpdateUserStatusSchema
 } from '../schemas';
 import {
+  CreateMessageSchema,
   CreateTicketSchema,
   IdParamSchema,
   ListTicketsQuerySchema,
@@ -97,7 +105,7 @@ router.get(
 
 // Ticket Routes (règles d'accès appliquées dans ticket.service)
 router.get('/tickets', authMiddleware, validate(ListTicketsQuerySchema, 'query'), listTickets);
-router.post('/tickets', authMiddleware, validate(CreateTicketSchema), createTicket);
+router.post('/tickets', authMiddleware, ticketCreateRateLimit, validate(CreateTicketSchema), createTicket);
 router.get('/tickets/:id', authMiddleware, validate(IdParamSchema, 'params'), getTicket);
 router.patch(
   '/tickets/:id',
@@ -106,6 +114,16 @@ router.patch(
   validate(IdParamSchema, 'params'),
   validate(UpdateTicketSchema),
   updateTicket
+);
+
+// Fil de discussion du ticket (réponses de l'IA, de l'utilisateur et des agents)
+router.get('/tickets/:id/messages', authMiddleware, validate(IdParamSchema, 'params'), listMessages);
+router.post(
+  '/tickets/:id/messages',
+  authMiddleware,
+  validate(IdParamSchema, 'params'),
+  validate(CreateMessageSchema),
+  addMessage
 );
 
 // Ancienne route agent conservée : même listing, filtré par les règles d'accès

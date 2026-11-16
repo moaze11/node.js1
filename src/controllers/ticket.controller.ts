@@ -12,8 +12,18 @@ export const listTickets = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const createTicket = asyncHandler(async (req: Request, res: Response) => {
-  const ticket = await ticketService.createTicket(actorOf(req), res.locals.body);
-  res.status(201).json({ data: ticket });
+  const { ticket, aiReply } = await ticketService.createTicket(actorOf(req), res.locals.body);
+  res.status(201).json({ data: ticket, aiReply });
+});
+
+export const listMessages = asyncHandler(async (req: Request, res: Response) => {
+  const messages = await ticketService.listMessages(actorOf(req), res.locals.params.id);
+  res.json({ data: messages });
+});
+
+export const addMessage = asyncHandler(async (req: Request, res: Response) => {
+  const message = await ticketService.addMessage(actorOf(req), res.locals.params.id, res.locals.body.content);
+  res.status(201).json({ data: message });
 });
 
 export const getTicket = asyncHandler(async (req: Request, res: Response) => {

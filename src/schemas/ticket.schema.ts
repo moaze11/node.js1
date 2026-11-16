@@ -30,6 +30,10 @@ export const UpdateTicketSchema = z
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Au moins un champ requis' });
 
+export const CreateMessageSchema = z.object({
+  content: z.string().trim().min(1, 'Message vide').max(5000),
+});
+
 export const IdParamSchema = z.object({
   id: z.coerce.number().int().min(1),
 });

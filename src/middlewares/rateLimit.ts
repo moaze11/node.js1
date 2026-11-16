@@ -16,11 +16,15 @@ export interface RateLimiter {
  * Note : en mémoire = remis à zéro au redémarrage et non partagé entre instances ;
  * en production multi-instances, passer sur Redis.
  */
-export const rateLimit = (maxRequests: number = 100, windowMs: number = 15 * 60 * 1000): RateLimiter => {
+export const rateLimit = (
+  maxRequests: number = 100,
+  windowMs: number = 15 * 60 * 1000,
+  keyFn: (req: Request) => string = (req) => req.ip || req.socket.remoteAddress || 'unknown'
+): RateLimiter => {
   const store = new Map<string, Bucket>();
 
   const limiter = ((req: Request, res: Response, next: NextFunction) => {
-    const identifier = req.ip || req.socket.remoteAddress || 'unknown';
+    const identifier = keyFn(req);
     const now = Date.now();
     let bucket = store.get(identifier);
 
@@ -61,3 +65,6 @@ export const sensitiveRateLimit = rateLimit(10, 15 * 60 * 1000);
 
 // Général : 100 requêtes / 15 min
 export const generalRateLimit = rateLimit(100, 15 * 60 * 1000);
+
+// Création de ticket (déclenche un appel IA payant) : 10 / heure / utilisateur connecté
+export const ticketCreateRateLimit = rateLimit(10, 60 * 60 * 1000, (req) => `user:${req.userId ?? req.ip}`);

@@ -16,6 +16,7 @@ export const prismaMock: any = {
   user: model(),
   role: model(),
   ticket: model(),
+  ticketMessage: model(),
   auditLog: model(),
   refreshToken: model(),
   invitation: model(),
