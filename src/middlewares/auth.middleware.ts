@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken } from '../utils';
+import { getSessionUser } from '../services/session.service';
 
 // Interface pour enrichir Request
 declare global {
@@ -13,7 +14,7 @@ declare global {
 }
 
 // Middleware : Vérifier le token d'accès
-export function authMiddleware(req: Request, res: Response, next: NextFunction) {
+export async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   try {
     const authHeader = req.headers.authorization;
 
@@ -24,14 +25,20 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
     const token = authHeader.substring(7); // Remove "Bearer "
     const payload = verifyAccessToken(token);
 
-    if (!payload) {
+    if (!payload || typeof payload.userId !== 'number') {
       return res.status(401).json({ error: 'Invalid or expired access token' });
     }
 
-    // Enrichir la requête avec les données du token
+    // Rôle et statut lus en base (pas dans le token) : une désactivation ou un
+    // changement de rôle prend effet immédiatement.
+    const sessionUser = await getSessionUser(payload.userId);
+    if (!sessionUser) {
+      return res.status(401).json({ error: 'Account disabled or not found' });
+    }
+
     req.userId = payload.userId;
-    req.email = payload.email;
-    req.role = payload.role;
+    req.email = sessionUser.email;
+    req.role = sessionUser.role;
 
     next();
   } catch (error) {

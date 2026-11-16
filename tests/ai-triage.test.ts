@@ -11,6 +11,7 @@ jest.mock('openai', () => ({
   __esModule: true,
   default: jest.fn().mockImplementation(() => ({ chat: { completions: { create: mockCreate } } }))
 }));
+jest.mock('../src/services/session.service', () => jest.requireActual('./helpers/sessionMock'));
 jest.mock('@prisma/client', () => {
   const { prismaMock } = jest.requireActual('./helpers/prismaMock');
   return { PrismaClient: jest.fn(() => prismaMock), Prisma: {} };

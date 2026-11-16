@@ -2,12 +2,23 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { hashPassword, comparePassword, generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../utils';
 import { AuthRequest, CreateUserRequest } from '../types';
+import bcrypt from 'bcryptjs';
+import { randomUUID } from 'crypto';
 
 const prisma = new PrismaClient();
+
+// Hash factice comparé quand l'email n'existe pas (temps de réponse identique)
+const DUMMY_HASH = bcrypt.hashSync(randomUUID(), 10);
 
 // Créer un Super Admin (une seule fois)
 export const createSuperAdmin = async (req: Request, res: Response) => {
   try {
+    // En production, la route est fermée sauf ouverture explicite le temps du premier déploiement :
+    // sinon, sur une base vide, le premier venu deviendrait SuperAdmin.
+    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SUPERADMIN_BOOTSTRAP !== 'true') {
+      return res.status(403).json({ error: 'SuperAdmin bootstrap is disabled' });
+    }
+
     const { email, password } = req.body as CreateUserRequest;
 
     // Vérifier si un SuperAdmin existe déjà
@@ -94,18 +105,15 @@ export const login = async (req: Request, res: Response) => {
       include: { role: true }
     });
 
-    if (!user) {
+    // Toujours comparer un hash (même factice) : le temps de réponse ne révèle pas si l'email existe
+    const validPassword = await comparePassword(password, user?.password ?? DUMMY_HASH);
+    if (!user || !validPassword) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    // Vérifié APRÈS le mot de passe : sans le bon mot de passe, on ne révèle pas qu'un compte est désactivé
     if (!user.isActive) {
       return res.status(401).json({ error: 'User account is disabled' });
-    }
-
-    // Vérifier le password
-    const validPassword = await comparePassword(password, user.password);
-    if (!validPassword) {
-      return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     // Générer tokens

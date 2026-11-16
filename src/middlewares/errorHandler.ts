@@ -38,6 +38,14 @@ export const errorHandler = (
     });
   }
 
+  // JSON invalide ou corps trop gros (body-parser) : erreur client, pas 500
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Invalid JSON body', statusCode: 400 });
+  }
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Request body too large', statusCode: 413 });
+  }
+
   // Prisma errors
   if (err.code === 'P2002') {
     return res.status(409).json({

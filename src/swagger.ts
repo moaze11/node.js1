@@ -1,4 +1,3 @@
-import swaggerJsdoc from 'swagger-jsdoc';
 
 const options = {
   definition: {
@@ -523,6 +522,6 @@ const extraEndpoints: Record<string, any> = {
 };
 
 export const swaggerSpec = {
-  ...(swaggerJsdoc(options) as Record<string, any>),
+  ...options.definition,
   paths: { ...swaggerEndpoints, ...extraEndpoints }
 };

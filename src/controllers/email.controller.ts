@@ -41,9 +41,11 @@ export const inviteUser = async (req: Request, res: Response) => {
     // Envoyer l'email
     await sendInvitationEmail(email, token);
 
+    // Le token n'est PAS renvoyé : seul l'invité (via l'email) doit pouvoir accepter.
+    // Sinon un Admin pourrait créer le compte à la place de l'invité, avec son propre mot de passe.
     res.status(201).json({
       message: 'Invitation sent',
-      invitationToken: token,
+      email,
       expiresAt: invitation.expiresAt
     });
   } catch (error) {

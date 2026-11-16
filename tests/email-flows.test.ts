@@ -5,6 +5,7 @@ import app from '../src/app';
 import { loginRateLimit, sensitiveRateLimit, generalRateLimit } from '../src/middlewares/rateLimit';
 import { sendInvitationEmail, sendPasswordResetEmail } from '../src/services/email.service';
 
+jest.mock('../src/services/session.service', () => jest.requireActual('./helpers/sessionMock'));
 jest.mock('@prisma/client', () => {
   const { prismaMock } = jest.requireActual('./helpers/prismaMock');
   return { PrismaClient: jest.fn(() => prismaMock), Prisma: {} };
