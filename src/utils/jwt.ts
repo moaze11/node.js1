@@ -1,15 +1,27 @@
 import jwt from 'jsonwebtoken';
+import { randomUUID } from 'crypto';
 import { TokenPayload } from '../types';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'secret';
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'refresh-secret';
+// Pas de valeur par défaut : sans secret (ou avec un secret faible), l'app refuse de démarrer.
+// Un repli du type 'secret' permettrait à n'importe qui de forger des tokens.
+function requireSecret(name: string): string {
+  const value = process.env[name];
+  if (!value || value.length < 32) {
+    throw new Error(`${name} must be set and at least 32 characters long`);
+  }
+  return value;
+}
+
+const JWT_SECRET = requireSecret('JWT_SECRET');
+const JWT_REFRESH_SECRET = requireSecret('JWT_REFRESH_SECRET');
 
 export function generateAccessToken(payload: TokenPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '15m' });
 }
 
 export function generateRefreshToken(userId: number): string {
-  return jwt.sign({ userId }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+  // jti aléatoire : deux tokens émis dans la même seconde restent différents (rotation)
+  return jwt.sign({ userId }, JWT_REFRESH_SECRET, { expiresIn: '7d', jwtid: randomUUID() });
 }
 
 export function verifyAccessToken(token: string): TokenPayload | null {

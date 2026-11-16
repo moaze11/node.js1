@@ -1,58 +1,38 @@
 import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY || 'test-key');
+const FROM = 'onboarding@resend.dev';
+const APP_URL = process.env.APP_URL || 'http://localhost:3002';
 
-export async function sendInvitationEmail(email: string, token: string): Promise<boolean> {
+/**
+ * Envoie un email via Resend. Resend v6 ne lève pas d'exception en cas d'échec :
+ * il renvoie { error }. On le vérifie, sinon un échec passerait pour un succès.
+ */
+async function send(to: string, subject: string, html: string, label: string): Promise<boolean> {
   try {
-    const invitationLink = `http://localhost:3002/auth/accept-invitation?token=${token}`;
-
-    await resend.emails.send({
-      from: 'onboarding@resend.dev',
-      to: email,
-      subject: 'You are invited!',
-      html: `<p>Click <a href="${invitationLink}">here</a> to accept the invitation</p>`
-    });
-
-    console.log(`✅ Invitation sent to ${email}`);
+    const { error } = await resend.emails.send({ from: FROM, to, subject, html });
+    if (error) {
+      console.error(`Failed to send ${label}:`, error);
+      return false;
+    }
+    console.log(`✅ ${label} sent to ${to}`);
     return true;
   } catch (error) {
-    console.error('Failed to send invitation:', error);
+    console.error(`Failed to send ${label}:`, error);
     return false;
   }
 }
 
-export async function sendPasswordResetEmail(email: string, token: string): Promise<boolean> {
-  try {
-    const resetLink = `http://localhost:3002/auth/reset-password?token=${token}`;
-
-    await resend.emails.send({
-      from: 'onboarding@resend.dev',
-      to: email,
-      subject: 'Reset your password',
-      html: `<p>Click <a href="${resetLink}">here</a> to reset your password</p>`
-    });
-
-    console.log(`✅ Password reset sent to ${email}`);
-    return true;
-  } catch (error) {
-    console.error('Failed to send reset email:', error);
-    return false;
-  }
+export function sendInvitationEmail(email: string, token: string): Promise<boolean> {
+  const link = `${APP_URL}/auth/accept-invitation?token=${encodeURIComponent(token)}`;
+  return send(email, 'You are invited!', `<p>Click <a href="${link}">here</a> to accept the invitation</p>`, 'Invitation');
 }
 
-export async function sendWelcomeEmail(email: string): Promise<boolean> {
-  try {
-    await resend.emails.send({
-      from: 'onboarding@resend.dev',
-      to: email,
-      subject: 'Welcome to Auth API!',
-      html: `<p>Welcome ${email}! Your account is ready.</p>`
-    });
+export function sendPasswordResetEmail(email: string, token: string): Promise<boolean> {
+  const link = `${APP_URL}/auth/reset-password?token=${encodeURIComponent(token)}`;
+  return send(email, 'Reset your password', `<p>Click <a href="${link}">here</a> to reset your password</p>`, 'Password reset');
+}
 
-    console.log(`✅ Welcome email sent to ${email}`);
-    return true;
-  } catch (error) {
-    console.error('Failed to send welcome email:', error);
-    return false;
-  }
+export function sendWelcomeEmail(email: string): Promise<boolean> {
+  return send(email, 'Welcome to Auth API!', '<p>Welcome! Your account is ready.</p>', 'Welcome email');
 }

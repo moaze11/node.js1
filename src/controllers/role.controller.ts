@@ -1,195 +1,110 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../types/config';
 import { hashPassword } from '../utils';
+import { AppError, asyncHandler } from '../middlewares/errorHandler';
+import { logRoleAssigned, logUserCreated, logUserStatusChanged } from '../services/audit.service';
 
-const prisma = new PrismaClient();
+// Champs publics d'un user : jamais le hash du mot de passe
+const publicUserSelect = {
+  id: true,
+  email: true,
+  isActive: true,
+  emailVerified: true,
+  createdAt: true,
+  role: { select: { id: true, name: true } },
+} as const;
 
 // ========== SUPER ADMIN ONLY ==========
 
 // SuperAdmin : Créer un user directement (sans invitation)
-export const createUserAsSuperAdmin = async (req: Request, res: Response) => {
-  try {
-    const { email, password, roleId } = req.body;
+export const createUserAsSuperAdmin = asyncHandler(async (req: Request, res: Response) => {
+  const { email, password, roleId } = res.locals.body;
 
-    if (!email || !password || !roleId) {
-      return res.status(400).json({ error: 'Email, password, and roleId required' });
-    }
+  const role = await prisma.role.findUnique({ where: { id: roleId } });
+  if (!role) throw new AppError('Role not found', 400);
 
-    // Vérifier que le rôle existe
-    const role = await prisma.role.findUnique({ where: { id: roleId } });
-    if (!role) {
-      return res.status(400).json({ error: 'Role not found' });
-    }
+  const existingUser = await prisma.user.findUnique({ where: { email } });
+  if (existingUser) throw new AppError('User already exists', 409);
 
-    // Vérifier que l'email n'existe pas
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) {
-      return res.status(400).json({ error: 'User already exists' });
-    }
+  const user = await prisma.user.create({
+    data: { email, password: await hashPassword(password), roleId, emailVerified: true },
+    select: publicUserSelect,
+  });
 
-    const hashedPassword = await hashPassword(password);
-
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        roleId,
-        emailVerified: true
-      },
-      include: { role: true }
-    });
-
-    res.status(201).json({
-      message: 'User created by SuperAdmin',
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role.name
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create user' });
-  }
-};
+  await logUserCreated(req.userId as number, user.id, user.email, req.ip);
+  res.status(201).json({ message: 'User created by SuperAdmin', data: user });
+});
 
 // SuperAdmin : Assigner un rôle à un user
-export const assignRole = async (req: Request, res: Response) => {
-  try {
-    const { userId, roleId } = req.body;
+export const assignRole = asyncHandler(async (req: Request, res: Response) => {
+  const userId: number = res.locals.params.id;
+  const { roleId } = res.locals.body;
 
-    if (!userId || !roleId) {
-      return res.status(400).json({ error: 'userId and roleId required' });
-    }
+  if (userId === req.userId) throw new AppError('You cannot change your own role', 400);
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      return res.status(400).json({ error: 'User not found' });
-    }
+  const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: true } });
+  if (!user) throw new AppError('User not found', 404);
 
-    const role = await prisma.role.findUnique({ where: { id: roleId } });
-    if (!role) {
-      return res.status(400).json({ error: 'Role not found' });
-    }
+  const role = await prisma.role.findUnique({ where: { id: roleId } });
+  if (!role) throw new AppError('Role not found', 400);
 
-    const updatedUser = await prisma.user.update({
-      where: { id: userId },
-      data: { roleId },
-      include: { role: true }
+  const updatedUser = await prisma.user.update({
+    where: { id: userId },
+    data: { roleId },
+    select: publicUserSelect,
+  });
+
+  await logRoleAssigned(req.userId as number, userId, user.role.name, role.name, req.ip);
+  res.json({ message: 'Role assigned', data: updatedUser });
+});
+
+// SuperAdmin : Désactiver / réactiver un user
+export const toggleUserStatus = asyncHandler(async (req: Request, res: Response) => {
+  const userId: number = res.locals.params.id;
+  const { isActive } = res.locals.body;
+
+  if (userId === req.userId) throw new AppError('You cannot change your own status', 400);
+
+  const existing = await prisma.user.findUnique({ where: { id: userId } });
+  if (!existing) throw new AppError('User not found', 404);
+
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: { isActive },
+    select: publicUserSelect,
+  });
+
+  // Compte désactivé : on coupe ses sessions (refresh tokens révoqués)
+  if (!isActive) {
+    await prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
     });
-
-    res.json({
-      message: 'Role assigned',
-      user: {
-        id: updatedUser.id,
-        email: updatedUser.email,
-        role: updatedUser.role.name
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to assign role' });
   }
-};
 
-// SuperAdmin : Disable/Enable un user
-export const toggleUserStatus = async (req: Request, res: Response) => {
-  try {
-    const { userId, isActive } = req.body;
-
-    if (userId === undefined || isActive === undefined) {
-      return res.status(400).json({ error: 'userId and isActive required' });
-    }
-
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: { isActive },
-      include: { role: true }
-    });
-
-    res.json({
-      message: `User ${isActive ? 'activated' : 'disabled'}`,
-      user: {
-        id: user.id,
-        email: user.email,
-        isActive: user.isActive
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to toggle user status' });
-  }
-};
+  await logUserStatusChanged(req.userId as number, userId, isActive, req.ip);
+  res.json({ message: `User ${isActive ? 'activated' : 'disabled'}`, data: user });
+});
 
 // ========== ADMIN ONLY ==========
 
-// Admin : Lister tous les users
-export const listAllUsers = async (req: Request, res: Response) => {
-  try {
-    const users = await prisma.user.findMany({
-      include: { role: true }
-    });
-
-    res.json({
-      message: 'Users list',
-      total: users.length,
-      users
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to list users' });
-  }
-};
-
-// ========== AGENT ONLY ==========
-
-// Agent : Voir les tickets (mock)
-export const viewTickets = async (req: Request, res: Response) => {
-  try {
-    res.json({
-      message: 'Tickets list (agent can view)',
-      tickets: [
-        { id: 1, title: 'Ticket 1', status: 'open' },
-        { id: 2, title: 'Ticket 2', status: 'in_progress' }
-      ]
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to view tickets' });
-  }
-};
+// Admin : Lister tous les users (sans les mots de passe)
+export const listAllUsers = asyncHandler(async (_req: Request, res: Response) => {
+  const users = await prisma.user.findMany({ select: publicUserSelect, orderBy: { id: 'asc' } });
+  res.json({ message: 'Users list', total: users.length, data: users });
+});
 
 // ========== ALL AUTHENTICATED USERS ==========
 
 // Récupérer son profil
-export const getMyProfile = async (req: Request, res: Response) => {
-  try {
-    const userId = req.userId;
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { role: true }
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    res.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role.name,
-        isActive: user.isActive,
-        emailVerified: user.emailVerified
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to get profile' });
-  }
-};
+export const getMyProfile = asyncHandler(async (req: Request, res: Response) => {
+  const user = await prisma.user.findUnique({ where: { id: req.userId }, select: publicUserSelect });
+  if (!user) throw new AppError('User not found', 404);
+  res.json({ data: user });
+});
 
 // Récupérer les rôles disponibles
-export const getRoles = async (req: Request, res: Response) => {
-  try {
-    const roles = await prisma.role.findMany();
-    res.json({ roles });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to get roles' });
-  }
-};
+export const getRoles = asyncHandler(async (_req: Request, res: Response) => {
+  const roles = await prisma.role.findMany();
+  res.json({ data: roles });
+});

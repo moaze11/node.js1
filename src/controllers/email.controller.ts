@@ -129,9 +129,10 @@ export const forgotPassword = async (req: Request, res: Response) => {
 
     // Vérifier que l'user existe
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      // Ne pas révéler si l'email existe ou non (sécurité)
-      return res.json({ message: 'If email exists, password reset link has been sent' });
+    // Même réponse dans tous les cas : on ne révèle pas si l'email existe
+    const genericResponse = { message: 'If this email exists, a password reset link has been sent' };
+    if (!user || !user.isActive) {
+      return res.json(genericResponse);
     }
 
     // Créer un token de reset
@@ -147,7 +148,7 @@ export const forgotPassword = async (req: Request, res: Response) => {
     // Envoyer l'email
     await sendPasswordResetEmail(email, token);
 
-    res.json({ message: 'Password reset email sent' });
+    res.json(genericResponse);
   } catch (error) {
     res.status(500).json({ error: 'Failed to send reset email' });
   }
@@ -180,19 +181,26 @@ export const resetPassword = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Reset token already used' });
     }
 
-    // Hash le nouveau password
-    const hashedPassword = await hashPassword(password);
+    // Usage unique atomique : on "consomme" le token seulement s'il n'est pas déjà utilisé.
+    // Deux requêtes simultanées avec le même token → une seule passe.
+    const consumed = await prisma.passwordReset.updateMany({
+      where: { id: resetRecord.id, usedAt: null },
+      data: { usedAt: new Date() }
+    });
+    if (consumed.count === 0) {
+      return res.status(400).json({ error: 'Reset token already used' });
+    }
 
-    // Mettre à jour le password
+    const hashedPassword = await hashPassword(password);
     await prisma.user.update({
       where: { id: resetRecord.userId },
       data: { password: hashedPassword }
     });
 
-    // Marquer le token comme utilisé
-    await prisma.passwordReset.update({
-      where: { id: resetRecord.id },
-      data: { usedAt: new Date() }
+    // Nouveau mot de passe : on coupe les sessions existantes
+    await prisma.refreshToken.updateMany({
+      where: { userId: resetRecord.userId, revokedAt: null },
+      data: { revokedAt: new Date() }
     });
 
     res.json({ message: 'Password reset successfully' });

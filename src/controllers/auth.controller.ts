@@ -159,7 +159,7 @@ export const refreshToken = async (req: Request, res: Response) => {
       where: { token }
     });
 
-    if (!dbToken || dbToken.revokedAt) {
+    if (!dbToken || dbToken.revokedAt || dbToken.expiresAt < new Date() || dbToken.userId !== payload.userId) {
       return res.status(401).json({ error: 'Refresh token revoked or expired' });
     }
 
@@ -180,7 +180,20 @@ export const refreshToken = async (req: Request, res: Response) => {
       role: user.role.name
     });
 
-    res.json({ accessToken: newAccessToken });
+    // Rotation : l'ancien refresh token est révoqué, un nouveau est émis
+    const newRefreshToken = generateRefreshToken(user.id);
+    await prisma.$transaction([
+      prisma.refreshToken.update({ where: { id: dbToken.id }, data: { revokedAt: new Date() } }),
+      prisma.refreshToken.create({
+        data: {
+          token: newRefreshToken,
+          userId: user.id,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+        }
+      })
+    ]);
+
+    res.json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
   } catch (error) {
     res.status(500).json({ error: 'Token refresh failed' });
   }

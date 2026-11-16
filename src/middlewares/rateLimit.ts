@@ -1,53 +1,63 @@
 import { Request, Response, NextFunction } from 'express';
 
-interface RateLimitStore {
-  [key: string]: { count: number; resetTime: number };
+interface Bucket {
+  count: number;
+  resetTime: number;
 }
 
-const store: RateLimitStore = {};
+export interface RateLimiter {
+  (req: Request, res: Response, next: NextFunction): void;
+  reset: () => void;
+}
 
-export const rateLimit = (maxRequests: number = 100, windowMs: number = 15 * 60 * 1000) => {
-  return (req: Request, res: Response, next: NextFunction) => {
+/**
+ * Limiteur en mémoire, par IP. Chaque limiteur a SON propre compteur
+ * (avant, tous partageaient le même : le trafic général consommait le quota du login).
+ * Note : en mémoire = remis à zéro au redémarrage et non partagé entre instances ;
+ * en production multi-instances, passer sur Redis.
+ */
+export const rateLimit = (maxRequests: number = 100, windowMs: number = 15 * 60 * 1000): RateLimiter => {
+  const store = new Map<string, Bucket>();
+
+  const limiter = ((req: Request, res: Response, next: NextFunction) => {
     const identifier = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
+    let bucket = store.get(identifier);
 
-    if (!store[identifier]) {
-      store[identifier] = { count: 1, resetTime: now + windowMs };
-      return next();
+    if (!bucket || now > bucket.resetTime) {
+      bucket = { count: 0, resetTime: now + windowMs };
+      store.set(identifier, bucket);
     }
 
-    const { count, resetTime } = store[identifier];
+    res.setHeader('X-RateLimit-Limit', maxRequests);
+    res.setHeader('X-RateLimit-Remaining', Math.max(0, maxRequests - bucket.count - 1));
 
-    if (now > resetTime) {
-      store[identifier] = { count: 1, resetTime: now + windowMs };
-      return next();
+    if (bucket.count >= maxRequests) {
+      const retryAfter = Math.ceil((bucket.resetTime - now) / 1000);
+      res.setHeader('Retry-After', retryAfter);
+      return res.status(429).json({ error: 'Too many requests', retryAfter, statusCode: 429 });
     }
 
-    if (count >= maxRequests) {
-      return res.status(429).json({
-        error: 'Too many requests',
-        retryAfter: Math.ceil((resetTime - now) / 1000),
-        statusCode: 429
-      });
-    }
-
-    store[identifier].count++;
+    bucket.count++;
     next();
-  };
+  }) as RateLimiter;
+
+  limiter.reset = () => store.clear();
+
+  // Nettoyage périodique ; unref() pour ne pas empêcher le process (ou Jest) de se terminer
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, b] of store) if (b.resetTime < now) store.delete(key);
+  }, Math.max(windowMs, 60_000)).unref();
+
+  return limiter;
 };
 
-// Strict rate limit for login attempts (5 per 15 min)
+// Login : 5 tentatives / 15 min (anti brute-force)
 export const loginRateLimit = rateLimit(5, 15 * 60 * 1000);
 
-// Moderate rate limit for general endpoints (100 per 15 min)
-export const generalRateLimit = rateLimit(100, 15 * 60 * 1000);
+// Autres routes sensibles (invitation, reset mot de passe, bootstrap) : 10 / 15 min
+export const sensitiveRateLimit = rateLimit(10, 15 * 60 * 1000);
 
-// Cleanup old entries every 30 minutes
-setInterval(() => {
-  const now = Date.now();
-  Object.keys(store).forEach(key => {
-    if (store[key].resetTime < now) {
-      delete store[key];
-    }
-  });
-}, 30 * 60 * 1000);
+// Général : 100 requêtes / 15 min
+export const generalRateLimit = rateLimit(100, 15 * 60 * 1000);

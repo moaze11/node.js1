@@ -58,9 +58,8 @@ const options = {
   apis: []
 };
 
-export const swaggerSpec = swaggerJsdoc(options);
 
-export const swaggerEndpoints = {
+const swaggerEndpoints: Record<string, any> = {
   '/auth/super-admin': {
     post: {
       summary: 'Create Super Admin (one-time)',
@@ -176,9 +175,9 @@ export const swaggerEndpoints = {
       }
     }
   },
-  '/email/invite': {
+  '/auth/invite': {
     post: {
-      summary: 'Send invitation (SuperAdmin only)',
+      summary: 'Send invitation (Admin or SuperAdmin)',
       tags: ['Email'],
       security: [{ bearerAuth: [] }],
       requestBody: {
@@ -200,7 +199,7 @@ export const swaggerEndpoints = {
       }
     }
   },
-  '/email/accept-invitation': {
+  '/auth/accept-invitation': {
     post: {
       summary: 'Accept invitation and set password',
       tags: ['Email'],
@@ -224,7 +223,7 @@ export const swaggerEndpoints = {
       }
     }
   },
-  '/email/forgot-password': {
+  '/auth/forgot-password': {
     post: {
       summary: 'Request password reset',
       tags: ['Email'],
@@ -246,7 +245,7 @@ export const swaggerEndpoints = {
       }
     }
   },
-  '/email/reset-password': {
+  '/auth/reset-password': {
     post: {
       summary: 'Reset password with token',
       tags: ['Email'],
@@ -305,4 +304,170 @@ export const swaggerEndpoints = {
       }
     }
   }
+};
+
+const bearer = [{ bearerAuth: [] }];
+const idParam = { name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } };
+const validationError = { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } };
+
+const ticketSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'integer' },
+    title: { type: 'string' },
+    description: { type: 'string' },
+    status: { type: 'string', enum: ['open', 'in_progress', 'closed'] },
+    priority: { type: 'string', enum: ['low', 'medium', 'high'] },
+    ownerId: { type: 'integer' },
+    assigneeId: { type: 'integer', nullable: true },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' }
+  }
+};
+
+const paginationSchema = {
+  type: 'object',
+  properties: {
+    page: { type: 'integer' },
+    limit: { type: 'integer' },
+    total: { type: 'integer' },
+    totalPages: { type: 'integer' }
+  }
+};
+
+const listTicketsOp = {
+  summary: 'List tickets (paginated, filtered, sorted)',
+  description:
+    'Access rules: SuperAdmin/Admin see all tickets; Agent sees tickets assigned to them and unassigned ones; User sees only their own tickets.',
+  tags: ['Tickets'],
+  security: bearer,
+  parameters: [
+    { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+    { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+    { name: 'status', in: 'query', schema: { type: 'string', enum: ['open', 'in_progress', 'closed'] } },
+    { name: 'priority', in: 'query', schema: { type: 'string', enum: ['low', 'medium', 'high'] } },
+    { name: 'assigneeId', in: 'query', schema: { type: 'integer', minimum: 1 } },
+    { name: 'search', in: 'query', schema: { type: 'string', maxLength: 100 }, description: 'Search in title and description' },
+    { name: 'sortBy', in: 'query', schema: { type: 'string', enum: ['createdAt', 'updatedAt', 'title', 'status', 'priority'], default: 'createdAt' } },
+    { name: 'order', in: 'query', schema: { type: 'string', enum: ['asc', 'desc'], default: 'desc' } }
+  ],
+  responses: {
+    200: {
+      description: 'Paginated tickets',
+      content: {
+        'application/json': {
+          schema: { type: 'object', properties: { data: { type: 'array', items: ticketSchema }, pagination: paginationSchema } }
+        }
+      }
+    },
+    400: validationError,
+    401: { description: 'Unauthorized' }
+  }
+};
+
+const extraEndpoints: Record<string, any> = {
+  '/health': {
+    get: { summary: 'Health check', tags: ['System'], responses: { 200: { description: 'OK' } } }
+  },
+  '/admin/users/{id}/role': {
+    patch: {
+      summary: 'Change a user role (SuperAdmin only, audited)',
+      tags: ['Admin'],
+      security: bearer,
+      parameters: [idParam],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { type: 'object', required: ['roleId'], properties: { roleId: { type: 'integer', minimum: 1 } } } } }
+      },
+      responses: { 200: { description: 'Role assigned' }, 400: validationError, 403: { description: 'Forbidden' }, 404: { description: 'User not found' } }
+    }
+  },
+  '/admin/users/{id}/status': {
+    patch: {
+      summary: 'Disable / reactivate a user (SuperAdmin only, audited; disabling revokes refresh tokens)',
+      tags: ['Admin'],
+      security: bearer,
+      parameters: [idParam],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { type: 'object', required: ['isActive'], properties: { isActive: { type: 'boolean' } } } } }
+      },
+      responses: { 200: { description: 'Status updated' }, 400: validationError, 403: { description: 'Forbidden' }, 404: { description: 'User not found' } }
+    }
+  },
+  '/admin/audit-logs': {
+    get: {
+      summary: 'List audit logs (SuperAdmin only)',
+      tags: ['Admin'],
+      security: bearer,
+      parameters: [
+        { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+        { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200, default: 50 } },
+        { name: 'action', in: 'query', schema: { type: 'string', example: 'ROLE_ASSIGNED' } }
+      ],
+      responses: { 200: { description: 'Paginated audit logs' }, 403: { description: 'Forbidden' } }
+    }
+  },
+  '/tickets': {
+    get: listTicketsOp,
+    post: {
+      summary: 'Create a ticket (any authenticated user)',
+      tags: ['Tickets'],
+      security: bearer,
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['title'],
+              properties: {
+                title: { type: 'string', minLength: 3, maxLength: 200 },
+                description: { type: 'string', maxLength: 5000 },
+                priority: { type: 'string', enum: ['low', 'medium', 'high'] }
+              }
+            }
+          }
+        }
+      },
+      responses: { 201: { description: 'Ticket created' }, 400: validationError, 401: { description: 'Unauthorized' } }
+    }
+  },
+  '/tickets/{id}': {
+    get: {
+      summary: 'Get a ticket (404 if not visible to the caller)',
+      tags: ['Tickets'],
+      security: bearer,
+      parameters: [idParam],
+      responses: { 200: { description: 'Ticket' }, 404: { description: 'Not found' } }
+    },
+    patch: {
+      summary: 'Update status / priority / assignee (Agent+; agents can only assign to themselves)',
+      tags: ['Tickets'],
+      security: bearer,
+      parameters: [idParam],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                status: { type: 'string', enum: ['open', 'in_progress', 'closed'] },
+                priority: { type: 'string', enum: ['low', 'medium', 'high'] },
+                assigneeId: { type: 'integer', nullable: true }
+              }
+            }
+          }
+        }
+      },
+      responses: { 200: { description: 'Ticket updated' }, 400: validationError, 403: { description: 'Forbidden' }, 404: { description: 'Not found' } }
+    }
+  },
+  '/agent/tickets': { get: { ...listTicketsOp, summary: 'List tickets (Agent+ alias of GET /tickets)' } }
+};
+
+export const swaggerSpec = {
+  ...(swaggerJsdoc(options) as Record<string, any>),
+  paths: { ...swaggerEndpoints, ...extraEndpoints }
 };

@@ -29,9 +29,11 @@ export const errorHandler = (
 
   // Validation error
   if (err.name === 'ZodError') {
+    // Zod v4 expose les erreurs dans `issues` (plus `errors`)
+    const issues = err.issues ?? err.errors ?? [];
     return res.status(400).json({
       error: 'Validation Error',
-      details: err.errors,
+      details: issues.map((i: any) => ({ path: (i.path ?? []).join('.'), message: i.message })),
       statusCode: 400
     });
   }
