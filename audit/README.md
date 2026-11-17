@@ -24,6 +24,10 @@ attaques échouent.
 J'ai aussi essayé des attaques qui échouaient déjà avant mes corrections (IDOR, injection SQL,
 JWT forgé…). Elles sont dans [tests-conformes](tests-conformes/fiche.md).
 
+Enfin, j'ai passé deux outils d'analyse statique, Semgrep et SonarQube, sur le code avant et
+après correction. Ils n'ont trouvé aucune des 10 failles : voir
+[analyse-statique](analyse-statique/fiche.md).
+
 ## Organisation
 
 Chaque faille a son dossier, avec tout ce qui la concerne :
@@ -38,6 +42,7 @@ audit/
 │   └── apres.png                  capture : la même attaque est bloquée après correction
 ├── ...                            VULN-002 à VULN-010, même contenu
 ├── tests-conformes/               attaques qui échouent (fiche, script, résultat)
+├── analyse-statique/              Semgrep et SonarQube : rapports et comparaison
 └── outils/
     ├── demo.sh                    lance une attaque, avant ou après correction
     ├── start-test-api.sh          démarre une API de test sur une base vide (port 3099)

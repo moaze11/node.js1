@@ -1,0 +1,32 @@
+# SonarQube Community 26.11 (local, Docker), profil « Sonar way comprehensive » (440 règles TypeScript)
+# Code vulnérable (commit ae87776), 40 fichiers, 1 783 lignes
+
+Problèmes de sécurité : 0
+Security hotspots     : 0
+Autres problèmes      : 25 (maintenabilité / fiabilité)
+
+src/controllers/auth.controller.ts:6    typescript:S7772     maintainability/medium       Prefer `node:crypto` over `crypto`.
+src/controllers/auth.controller.ts:87   typescript:S2486     maintainability/low          Handle this exception, don't catch it at all, or explain in a comment why it is ignored.
+src/controllers/auth.controller.ts:145  typescript:S2486     maintainability/low          Handle this exception, don't catch it at all, or explain in a comment why it is ignored.
+src/controllers/auth.controller.ts:180  typescript:S6582     maintainability/low          Prefer using an optional chain expression instead, as it's more concise and easier to read.
+src/controllers/auth.controller.ts:205  typescript:S2486     maintainability/low          Handle this exception, don't catch it at all, or explain in a comment why it is ignored.
+src/controllers/auth.controller.ts:226  typescript:S2486     maintainability/low          Handle this exception, don't catch it at all, or explain in a comment why it is ignored.
+src/controllers/email.controller.ts:3    typescript:S1128     maintainability/low          Remove this unused import of 'comparePassword'.
+src/controllers/email.controller.ts:12   typescript:S1854     maintainability/medium       The value assigned to "superAdminId" is never read. Use it or remove this assignment.
+src/controllers/email.controller.ts:51   typescript:S2486     maintainability/low          Handle this exception, don't catch it at all, or explain in a comment why it is ignored.
+src/controllers/email.controller.ts:117  typescript:S2486     maintainability/low          Handle this exception, don't catch it at all, or explain in a comment why it is ignored.
+src/controllers/email.controller.ts:136  typescript:S6582     maintainability/low          Prefer using an optional chain expression instead, as it's more concise and easier to read.
+src/controllers/email.controller.ts:154  typescript:S2486     maintainability/low          Handle this exception, don't catch it at all, or explain in a comment why it is ignored.
+src/controllers/email.controller.ts:209  typescript:S2486     maintainability/low          Handle this exception, don't catch it at all, or explain in a comment why it is ignored.
+src/index.ts:9    typescript:S9382     maintainability/low          Unexpected `await` inside a loop.
+src/middlewares/auth.middleware.ts:21   typescript:S6582     maintainability/low          Prefer using an optional chain expression instead, as it's more concise and easier to read.
+src/middlewares/auth.middleware.ts:44   typescript:S2486     maintainability/low          Handle this exception, don't catch it at all, or explain in a comment why it is ignored.
+src/services/session.service.ts:18   typescript:S6582     maintainability/low          Prefer using an optional chain expression instead, as it's more concise and easier to read.
+src/services/ticket.service.ts:12   typescript:S7776     maintainability/medium       `STAFF_ROLES` should be a `Set`, and use `STAFF_ROLES.has()` to check existence or non-existence.
+src/services/ticket.service.ts:151  typescript:S6582     maintainability/low          Prefer using an optional chain expression instead, as it's more concise and easier to read.
+src/types/app.ts:1    typescript:S1128     maintainability/low          Remove this unused import of 'NextFunction'.
+src/types/app.ts:1    typescript:S1128     maintainability/low          Remove this unused import of 'Response'.
+src/utils/crypto.ts:3    typescript:S7503     maintainability/medium,reliability/low Async function 'hashPassword' has no 'await' expression.
+src/utils/crypto.ts:7    typescript:S7503     maintainability/medium,reliability/low Async function 'comparePassword' has no 'await' expression.
+src/utils/jwt.ts:2    typescript:S7772     maintainability/medium       Prefer `node:crypto` over `crypto`.
+src/utils/tokens.ts:1    typescript:S7772     maintainability/medium       Prefer `node:crypto` over `crypto`.
