@@ -32,3 +32,9 @@ Thumbs.db
 logs/
 *.log
 prisma/*.db-journal
+
+# Outils IA locaux
+.agents/
+.claude/
+.cursor/
+.devin/
