@@ -1,4 +1,4 @@
-name: CI
+name: CI auth-api
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
         node-version: [20.x, 22.x]
 
     env:
-      # Valeurs factices pour la CI : les tests mockent Prisma et n'utilisent aucune vraie base
+      # Valeurs factices : les tests mockent Prisma et n'utilisent aucune vraie base
       DATABASE_URL: file:./ci.db
       JWT_SECRET: ci-access-secret-0123456789abcdef0123456789
       JWT_REFRESH_SECRET: ci-refresh-secret-0123456789abcdef012345678
