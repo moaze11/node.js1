@@ -1,8 +1,8 @@
 import request from 'supertest';
 import { prismaMock, resetPrismaMock } from './helpers/prismaMock';
-import { generateAccessToken, generateRefreshToken, hashPassword } from '../src/utils';
+import { generateAccessToken, generateRefreshToken, hashPassword, hashToken, verifyAccessToken } from '../src/utils';
 import app from '../src/app';
-import { loginRateLimit, sensitiveRateLimit, generalRateLimit } from '../src/middlewares/rateLimit';
+import { resetAllRateLimits } from '../src/middlewares/rateLimit';
 
 jest.mock('../src/services/session.service', () => jest.requireActual('./helpers/sessionMock'));
 jest.mock('@prisma/client', () => {
@@ -16,7 +16,7 @@ jest.mock('../src/services/email.service', () => ({
 }));
 
 const tokenFor = (userId: number, role: string) =>
-  `Bearer ${generateAccessToken({ userId, email: `${role.toLowerCase()}@test.com`, role })}`;
+  `Bearer ${generateAccessToken({ userId, email: `${role.toLowerCase()}@test.com`, role, sid: 1 })}`;
 
 const SUPER = tokenFor(1, 'SuperAdmin');
 const ADMIN = tokenFor(2, 'Admin');
@@ -25,9 +25,7 @@ const USER = tokenFor(10, 'User');
 
 beforeEach(() => {
   resetPrismaMock();
-  loginRateLimit.reset();
-  sensitiveRateLimit.reset();
-  generalRateLimit.reset();
+  resetAllRateLimits();
 });
 
 jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -44,7 +42,7 @@ describe('Authentication', () => {
 
   it('logs in with valid credentials and returns access + refresh tokens', async () => {
     prismaMock.user.findUnique.mockResolvedValue(await activeUser());
-    prismaMock.refreshToken.create.mockResolvedValue({});
+    prismaMock.refreshToken.create.mockResolvedValue({ id: 7 });
 
     const res = await request(app).post('/auth/login').send({ email: 'user@test.com', password: 'Password123' });
 
@@ -53,6 +51,10 @@ describe('Authentication', () => {
     expect(res.body.refreshToken).toBeDefined();
     expect(res.body.user).toEqual({ id: 10, email: 'user@test.com', role: 'User' });
     expect(res.body.user.password).toBeUndefined();
+    // VULN-004 : seule l'empreinte du refresh token est stockée
+    expect(prismaMock.refreshToken.create.mock.calls[0][0].data.token).toBe(hashToken(res.body.refreshToken));
+    // VULN-002 : l'access token est rattaché à la session créée
+    expect(verifyAccessToken(res.body.accessToken)?.sid).toBe(7);
   });
 
   it('rejects a wrong password with 401', async () => {
@@ -80,8 +82,8 @@ describe('Authentication', () => {
       id: 5, token: oldToken, userId: 10, revokedAt: null, expiresAt: new Date(Date.now() + 60_000)
     });
     prismaMock.user.findUnique.mockResolvedValue(await activeUser());
-    prismaMock.refreshToken.update.mockResolvedValue({});
-    prismaMock.refreshToken.create.mockResolvedValue({});
+    prismaMock.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+    prismaMock.refreshToken.create.mockResolvedValue({ id: 6 });
 
     const res = await request(app).post('/auth/refresh').send({ refreshToken: oldToken });
 
@@ -89,21 +91,49 @@ describe('Authentication', () => {
     expect(res.body.accessToken).toBeDefined();
     expect(res.body.refreshToken).toBeDefined();
     expect(res.body.refreshToken).not.toBe(oldToken);
-    expect(prismaMock.refreshToken.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 5 }, data: { revokedAt: expect.any(Date) } })
-    );
+    expect(prismaMock.refreshToken.findUnique).toHaveBeenCalledWith({ where: { token: hashToken(oldToken) } });
+    // VULN-003 : consommation atomique (seulement si encore actif)
+    expect(prismaMock.refreshToken.updateMany).toHaveBeenCalledWith({
+      where: { id: 5, revokedAt: null },
+      data: { revokedAt: expect.any(Date) }
+    });
     expect(prismaMock.refreshToken.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ token: res.body.refreshToken, userId: 10 }) })
+      expect.objectContaining({ data: expect.objectContaining({ token: hashToken(res.body.refreshToken), userId: 10 }) })
     );
   });
 
-  it('refuses a revoked refresh token', async () => {
+  it('VULN-003: reusing a revoked refresh token revokes every session of the user', async () => {
     const token = generateRefreshToken(10);
     prismaMock.refreshToken.findUnique.mockResolvedValue({
-      id: 5, token, userId: 10, revokedAt: new Date(), expiresAt: new Date(Date.now() + 60_000)
+      id: 5, token: hashToken(token), userId: 10, revokedAt: new Date(), expiresAt: new Date(Date.now() + 60_000)
     });
+    prismaMock.refreshToken.updateMany.mockResolvedValue({ count: 2 });
+
     const res = await request(app).post('/auth/refresh').send({ refreshToken: token });
+
     expect(res.status).toBe(401);
+    expect(prismaMock.refreshToken.updateMany).toHaveBeenCalledWith({
+      where: { userId: 10, revokedAt: null },
+      data: { revokedAt: expect.any(Date) }
+    });
+    expect(prismaMock.refreshToken.create).not.toHaveBeenCalled();
+    expect(prismaMock.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ action: 'REFRESH_TOKEN_REUSE' }) })
+    );
+  });
+
+  it('VULN-003: a request that loses the race (token consumed meanwhile) gets no new session', async () => {
+    const token = generateRefreshToken(10);
+    prismaMock.refreshToken.findUnique.mockResolvedValue({
+      id: 5, token: hashToken(token), userId: 10, revokedAt: null, expiresAt: new Date(Date.now() + 60_000)
+    });
+    prismaMock.user.findUnique.mockResolvedValue(await activeUser());
+    prismaMock.refreshToken.updateMany.mockResolvedValue({ count: 0 }); // une autre requête l'a déjà consommé
+
+    const res = await request(app).post('/auth/refresh').send({ refreshToken: token });
+
+    expect(res.status).toBe(401);
+    expect(prismaMock.refreshToken.create).not.toHaveBeenCalled();
   });
 
   it('refuses an expired refresh token', async () => {
@@ -115,14 +145,28 @@ describe('Authentication', () => {
     expect(res.status).toBe(401);
   });
 
-  it('logout revokes the refresh token', async () => {
-    prismaMock.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+  it('logout revokes the session and logs it', async () => {
+    prismaMock.refreshToken.findUnique.mockResolvedValue({ id: 7, userId: 10, revokedAt: null });
+    prismaMock.refreshToken.update.mockResolvedValue({});
+
     const res = await request(app).post('/auth/logout').send({ refreshToken: 'some-token' });
+
     expect(res.status).toBe(200);
-    expect(prismaMock.refreshToken.updateMany).toHaveBeenCalledWith({
-      where: { token: 'some-token' },
+    expect(prismaMock.refreshToken.findUnique).toHaveBeenCalledWith({ where: { token: hashToken('some-token') } });
+    expect(prismaMock.refreshToken.update).toHaveBeenCalledWith({
+      where: { id: 7 },
       data: { revokedAt: expect.any(Date) }
     });
+    expect(prismaMock.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ action: 'USER_LOGOUT', actorId: 10 }) })
+    );
+  });
+
+  it('logout with an unknown token answers the same and changes nothing', async () => {
+    prismaMock.refreshToken.findUnique.mockResolvedValue(null);
+    const res = await request(app).post('/auth/logout').send({ refreshToken: 'unknown' });
+    expect(res.status).toBe(200);
+    expect(prismaMock.refreshToken.update).not.toHaveBeenCalled();
   });
 });
 

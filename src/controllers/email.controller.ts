@@ -1,7 +1,9 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { generateToken, TOKEN_EXPIRY, getExpiryDate, hashPassword, comparePassword } from '../utils';
+import { generateToken, TOKEN_EXPIRY, getExpiryDate, hashPassword, hashToken } from '../utils';
 import { sendInvitationEmail, sendPasswordResetEmail } from '../services/email.service';
+import { revokeAllSessions } from '../services/session.service';
+import { logPasswordReset } from '../services/audit.service';
 
 const prisma = new PrismaClient();
 
@@ -33,7 +35,7 @@ export const inviteUser = async (req: Request, res: Response) => {
     const invitation = await prisma.invitation.create({
       data: {
         email,
-        token,
+        token: hashToken(token), // VULN-004 : seule l'empreinte est stockée
         expiresAt: getExpiryDate(TOKEN_EXPIRY.INVITATION)
       }
     });
@@ -67,7 +69,7 @@ export const acceptInvitation = async (req: Request, res: Response) => {
     }
 
     // Vérifier l'invitation
-    const invitation = await prisma.invitation.findUnique({ where: { token } });
+    const invitation = await prisma.invitation.findUnique({ where: { token: hashToken(token) } });
     if (!invitation) {
       return res.status(400).json({ error: 'Invalid invitation token' });
     }
@@ -120,39 +122,49 @@ export const acceptInvitation = async (req: Request, res: Response) => {
 };
 
 // FORGOT PASSWORD
+/**
+ * Crée le lien de reset et envoie l'email, si le compte existe et est actif.
+ * Appelée APRÈS l'envoi de la réponse (VULN-006).
+ */
+export async function issuePasswordReset(email: string): Promise<void> {
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user || !user.isActive) return;
+
+  // VULN-008 : un seul lien valide à la fois. Les anciens sont neutralisés.
+  await prisma.passwordReset.updateMany({
+    where: { userId: user.id, usedAt: null },
+    data: { usedAt: new Date() }
+  });
+
+  const token = generateToken();
+  await prisma.passwordReset.create({
+    data: {
+      token: hashToken(token), // VULN-004 : seule l'empreinte est stockée
+      userId: user.id,
+      expiresAt: getExpiryDate(TOKEN_EXPIRY.PASSWORD_RESET)
+    }
+  });
+
+  await sendPasswordResetEmail(email, token);
+}
+
+// FORGOT PASSWORD
 export const forgotPassword = async (req: Request, res: Response) => {
+  const { email } = req.body;
+
+  if (!email || email.trim().length === 0) {
+    return res.status(400).json({ error: 'Email required' });
+  }
+
+  // VULN-006 : réponse immédiate et identique, AVANT toute recherche en base ou envoi d'email.
+  // Avant, le travail fait seulement pour un compte existant (écritures, appel à Resend)
+  // rallongeait la réponse et révélait les emails inscrits.
+  res.json({ message: 'If this email exists, a password reset link has been sent' });
+
   try {
-    const { email } = req.body;
-
-    // Validation
-    if (!email || email.trim().length === 0) {
-      return res.status(400).json({ error: 'Email required' });
-    }
-
-    // Vérifier que l'user existe
-    const user = await prisma.user.findUnique({ where: { email } });
-    // Même réponse dans tous les cas : on ne révèle pas si l'email existe
-    const genericResponse = { message: 'If this email exists, a password reset link has been sent' };
-    if (!user || !user.isActive) {
-      return res.json(genericResponse);
-    }
-
-    // Créer un token de reset
-    const token = generateToken();
-    await prisma.passwordReset.create({
-      data: {
-        token,
-        userId: user.id,
-        expiresAt: getExpiryDate(TOKEN_EXPIRY.PASSWORD_RESET)
-      }
-    });
-
-    // Envoyer l'email
-    await sendPasswordResetEmail(email, token);
-
-    res.json(genericResponse);
+    await issuePasswordReset(email);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to send reset email' });
+    console.error('[forgot-password] échec du traitement :', error);
   }
 };
 
@@ -170,7 +182,7 @@ export const resetPassword = async (req: Request, res: Response) => {
     }
 
     // Vérifier le token
-    const resetRecord = await prisma.passwordReset.findUnique({ where: { token } });
+    const resetRecord = await prisma.passwordReset.findUnique({ where: { token: hashToken(token) } });
     if (!resetRecord) {
       return res.status(400).json({ error: 'Invalid reset token' });
     }
@@ -199,11 +211,9 @@ export const resetPassword = async (req: Request, res: Response) => {
       data: { password: hashedPassword }
     });
 
-    // Nouveau mot de passe : on coupe les sessions existantes
-    await prisma.refreshToken.updateMany({
-      where: { userId: resetRecord.userId, revokedAt: null },
-      data: { revokedAt: new Date() }
-    });
+    // Nouveau mot de passe : on coupe les sessions existantes (et leurs access tokens, VULN-002)
+    await revokeAllSessions(resetRecord.userId);
+    await logPasswordReset(resetRecord.userId, req.ip); // VULN-005
 
     res.json({ message: 'Password reset successfully' });
   } catch (error) {

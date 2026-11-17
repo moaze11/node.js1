@@ -31,7 +31,7 @@ describe('Password hashing', () => {
 
 describe('JWT tokens', () => {
   it('generates and verifies an access token (userId stays a number)', () => {
-    const token = generateAccessToken({ userId: 1, email: 'a@b.com', role: 'Admin' });
+    const token = generateAccessToken({ userId: 1, email: 'a@b.com', role: 'Admin', sid: 1 });
     const payload = verifyAccessToken(token);
     expect(payload?.userId).toBe(1);
     expect(typeof payload?.userId).toBe('number');
@@ -40,7 +40,7 @@ describe('JWT tokens', () => {
 
   it('rejects an invalid or tampered token', () => {
     expect(verifyAccessToken('invalid.token.here')).toBeNull();
-    const token = generateAccessToken({ userId: 1, email: 'a@b.com', role: 'User' });
+    const token = generateAccessToken({ userId: 1, email: 'a@b.com', role: 'User', sid: 1 });
     expect(verifyAccessToken(token.slice(0, -2) + 'xx')).toBeNull();
   });
 
@@ -52,7 +52,7 @@ describe('JWT tokens', () => {
   });
 
   it('an access token is not accepted as a refresh token', () => {
-    const access = generateAccessToken({ userId: 1, email: 'a@b.com', role: 'User' });
+    const access = generateAccessToken({ userId: 1, email: 'a@b.com', role: 'User', sid: 1 });
     expect(verifyRefreshToken(access)).toBeNull();
   });
 });

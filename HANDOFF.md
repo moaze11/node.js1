@@ -14,20 +14,24 @@ npx prisma migrate deploy
 npm run dev                  # http://localhost:3002 — Swagger : /api-docs
 ```
 
-Vérifier : `npm test` doit afficher 117 tests réussis.
+Vérifier : `npm test` doit afficher 139 tests réussis.
 
 ## Scénario complet (curl)
 
 ### 1. Créer le SuperAdmin (une seule fois, base vide)
 
+Mettre d'abord un secret dans `.env` : `SUPERADMIN_BOOTSTRAP_TOKEN=<openssl rand -hex 32>`, puis :
+
 ```bash
 curl -X POST http://localhost:3002/auth/super-admin \
   -H "Content-Type: application/json" \
+  -H "X-Bootstrap-Token: <le secret du .env>" \
   -d '{"email": "admin@example.com", "password": "SecurePass123"}'
 ```
 
-Refusé si un SuperAdmin existe déjà. En production (`NODE_ENV=production`), il faut en plus
-`ALLOW_SUPERADMIN_BOOTSTRAP=true` le temps du premier déploiement.
+Sans secret configuré, ou avec un mauvais secret : `403`. Refusé aussi si un SuperAdmin existe
+déjà. Une fois le SuperAdmin créé, retirer `SUPERADMIN_BOOTSTRAP_TOKEN` du `.env`
+(voir [audit/VULN-001](audit/VULN-001-bootstrap-superadmin.md)).
 
 ### 2. Se connecter
 

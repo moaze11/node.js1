@@ -1,0 +1,34 @@
+# Tests conformes — 2026-11-17 12:31 — version corrigée
+# $ ./audit/tests-conformes/tests.sh
+
+# Comptes créés : admin@corp.test (SuperAdmin), alice@corp.test (User)
+=== T1. IDOR : Alice lit le ticket n°1 de Bob
+{"error":"Ticket not found","statusCode":404}  -> HTTP 404
+{"error":"Ticket not found","statusCode":404}  -> HTTP 404
+
+=== T2. Élévation de privilèges : Alice (User) appelle des routes d'administration
+  GET /admin/users                -> HTTP 403
+  PATCH /admin/users/2/role (SuperAdmin) -> HTTP 403
+  GET /admin/audit-logs           -> HTTP 403
+
+=== T3. Injection SQL dans les paramètres de recherche et de tri
+  GET /tickets?search=' OR 1=1 --  (tickets renvoyés à Alice) :
+    "total":0
+    HTTP 200
+  GET /tickets?sortBy=password     -> HTTP 400
+  GET /tickets?sortBy=id;DROP TABLE User -> HTTP 400
+  Table User toujours présente : 3 comptes
+
+=== T4. JWT forgé
+  alg: none, SuperAdmin            -> HTTP 401
+  signé avec un autre secret       -> HTTP 401
+
+=== T5. Champs ajoutés : Alice envoie ownerId=1 (l'admin), status=closed, assigneeId=1
+  "status":"open"
+  "ownerId":2
+  "assigneeId":null
+  (id d'Alice : 2)
+
+=== T6. Compte désactivé : son token est refusé immédiatement
+  l'admin désactive Alice          -> HTTP 200
+  Alice appelle /user/profile      -> HTTP 401

@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { hashPassword, comparePassword, generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../utils';
+import { hashPassword, comparePassword, verifyRefreshToken, safeEqual, hashToken } from '../utils';
+import { issueSession, revokeAllSessions } from '../services/session.service';
+import { logFailedLogin, logUserLogin, logUserLogout, logRefreshTokenReuse } from '../services/audit.service';
 import { AuthRequest, CreateUserRequest } from '../types';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
@@ -10,15 +12,35 @@ const prisma = new PrismaClient();
 // Hash factice comparé quand l'email n'existe pas (temps de réponse identique)
 const DUMMY_HASH = bcrypt.hashSync(randomUUID(), 10);
 
+/**
+ * VULN-001 : le bootstrap n'est ouvert qu'à qui détient SUPERADMIN_BOOTSTRAP_TOKEN
+ * (en-tête X-Bootstrap-Token). Sans ce secret configuré, la route est fermée, quel que soit
+ * NODE_ENV : avant, une base vide sans NODE_ENV=production laissait le premier venu
+ * (ou deux attaquants en même temps) devenir SuperAdmin.
+ */
+const MIN_BOOTSTRAP_TOKEN_LENGTH = 32;
+
+function isBootstrapAuthorized(req: Request): boolean {
+  const expected = process.env.SUPERADMIN_BOOTSTRAP_TOKEN;
+  if (!expected || expected.length < MIN_BOOTSTRAP_TOKEN_LENGTH) return false;
+  return safeEqual(req.get('X-Bootstrap-Token') ?? '', expected);
+}
+
+// Un seul bootstrap à la fois dans ce processus : un double envoi légitime ne crée pas deux SuperAdmins
+let bootstrapInProgress = false;
+
 // Créer un Super Admin (une seule fois)
 export const createSuperAdmin = async (req: Request, res: Response) => {
-  try {
-    // En production, la route est fermée sauf ouverture explicite le temps du premier déploiement :
-    // sinon, sur une base vide, le premier venu deviendrait SuperAdmin.
-    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SUPERADMIN_BOOTSTRAP !== 'true') {
-      return res.status(403).json({ error: 'SuperAdmin bootstrap is disabled' });
-    }
+  // Même réponse que le secret soit absent ou faux : on ne révèle pas la configuration
+  if (!isBootstrapAuthorized(req)) {
+    return res.status(403).json({ error: 'SuperAdmin bootstrap is disabled' });
+  }
+  if (bootstrapInProgress) {
+    return res.status(409).json({ error: 'SuperAdmin bootstrap already in progress' });
+  }
 
+  bootstrapInProgress = true;
+  try {
     const { email, password } = req.body as CreateUserRequest;
 
     // Vérifier si un SuperAdmin existe déjà
@@ -58,22 +80,7 @@ export const createSuperAdmin = async (req: Request, res: Response) => {
       include: { role: true }
     });
 
-    // Générer tokens
-    const accessToken = generateAccessToken({
-      userId: user.id,
-      email: user.email,
-      role: user.role.name
-    });
-    const refreshToken = generateRefreshToken(user.id);
-
-    // Sauvegarder le refresh token
-    await prisma.refreshToken.create({
-      data: {
-        token: refreshToken,
-        userId: user.id,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      }
-    });
+    const { accessToken, refreshToken } = await issueSession({ id: user.id, email: user.email, role: user.role.name });
 
     res.status(201).json({
       accessToken,
@@ -86,6 +93,8 @@ export const createSuperAdmin = async (req: Request, res: Response) => {
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to create super admin' });
+  } finally {
+    bootstrapInProgress = false;
   }
 };
 
@@ -108,30 +117,18 @@ export const login = async (req: Request, res: Response) => {
     // Toujours comparer un hash (même factice) : le temps de réponse ne révèle pas si l'email existe
     const validPassword = await comparePassword(password, user?.password ?? DUMMY_HASH);
     if (!user || !validPassword) {
+      await logFailedLogin(email, req.ip); // VULN-005 : la force brute laisse une trace
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     // Vérifié APRÈS le mot de passe : sans le bon mot de passe, on ne révèle pas qu'un compte est désactivé
     if (!user.isActive) {
+      await logFailedLogin(email, req.ip);
       return res.status(401).json({ error: 'User account is disabled' });
     }
 
-    // Générer tokens
-    const accessToken = generateAccessToken({
-      userId: user.id,
-      email: user.email,
-      role: user.role.name
-    });
-    const refreshToken = generateRefreshToken(user.id);
-
-    // Sauvegarder le refresh token
-    await prisma.refreshToken.create({
-      data: {
-        token: refreshToken,
-        userId: user.id,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      }
-    });
+    const { accessToken, refreshToken } = await issueSession({ id: user.id, email: user.email, role: user.role.name });
+    await logUserLogin(user.id, req.ip);
 
     res.json({
       accessToken,
@@ -162,16 +159,23 @@ export const refreshToken = async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Invalid refresh token' });
     }
 
-    // Vérifier si le token existe en DB
+    // En base, seule l'empreinte du token est stockée (VULN-004)
     const dbToken = await prisma.refreshToken.findUnique({
-      where: { token }
+      where: { token: hashToken(token) }
     });
 
-    if (!dbToken || dbToken.revokedAt || dbToken.expiresAt < new Date() || dbToken.userId !== payload.userId) {
+    if (!dbToken || dbToken.userId !== payload.userId || dbToken.expiresAt < new Date()) {
       return res.status(401).json({ error: 'Refresh token revoked or expired' });
     }
 
-    // Récupérer l'user
+    // VULN-003 : un token déjà révoqué qui revient = il a été volé (ou rejoué).
+    // On coupe toutes les sessions de l'utilisateur : l'attaquant perd l'accès, la victime se reconnecte.
+    if (dbToken.revokedAt) {
+      await revokeAllSessions(dbToken.userId);
+      await logRefreshTokenReuse(dbToken.userId, req.ip);
+      return res.status(401).json({ error: 'Refresh token revoked or expired' });
+    }
+
     const user = await prisma.user.findUnique({
       where: { id: payload.userId },
       include: { role: true }
@@ -181,27 +185,20 @@ export const refreshToken = async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'User not found or disabled' });
     }
 
-    // Générer nouveau access token
-    const newAccessToken = generateAccessToken({
-      userId: user.id,
-      email: user.email,
-      role: user.role.name
+    // VULN-003 : rotation atomique. Le token n'est "consommé" que s'il est encore actif :
+    // sur N requêtes simultanées, une seule passe, les autres sont traitées comme une réutilisation.
+    const consumed = await prisma.refreshToken.updateMany({
+      where: { id: dbToken.id, revokedAt: null },
+      data: { revokedAt: new Date() }
     });
+    if (consumed.count === 0) {
+      await revokeAllSessions(user.id);
+      await logRefreshTokenReuse(user.id, req.ip);
+      return res.status(401).json({ error: 'Refresh token revoked or expired' });
+    }
 
-    // Rotation : l'ancien refresh token est révoqué, un nouveau est émis
-    const newRefreshToken = generateRefreshToken(user.id);
-    await prisma.$transaction([
-      prisma.refreshToken.update({ where: { id: dbToken.id }, data: { revokedAt: new Date() } }),
-      prisma.refreshToken.create({
-        data: {
-          token: newRefreshToken,
-          userId: user.id,
-          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-        }
-      })
-    ]);
-
-    res.json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
+    const tokens = await issueSession({ id: user.id, email: user.email, role: user.role.name });
+    res.json(tokens);
   } catch (error) {
     res.status(500).json({ error: 'Token refresh failed' });
   }
@@ -216,12 +213,14 @@ export const logout = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Refresh token required' });
     }
 
-    // Révoquer le token
-    await prisma.refreshToken.updateMany({
-      where: { token },
-      data: { revokedAt: new Date() }
-    });
+    // Révoquer la session : ses access tokens sont refusés immédiatement (VULN-002)
+    const session = await prisma.refreshToken.findUnique({ where: { token: hashToken(token) } });
+    if (session && !session.revokedAt) {
+      await prisma.refreshToken.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
+      await logUserLogout(session.userId, req.ip); // VULN-005
+    }
 
+    // Même réponse si le token est inconnu : on ne révèle rien
     res.json({ message: 'Logged out successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Logout failed' });

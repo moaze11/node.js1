@@ -16,6 +16,20 @@ export interface RateLimiter {
  * Note : en mémoire = remis à zéro au redémarrage et non partagé entre instances ;
  * en production multi-instances, passer sur Redis.
  */
+const allLimiters: RateLimiter[] = [];
+
+/** Remet tous les compteurs à zéro (tests). */
+export function resetAllRateLimits() {
+  for (const limiter of allLimiters) limiter.reset();
+}
+
+/**
+ * Clé = l'email visé, quelle que soit l'IP (VULN-007, VULN-008).
+ * La même clé est utilisée que le compte existe ou non : pas de fuite d'information.
+ */
+const byTargetEmail = (scope: string) => (req: Request) =>
+  `${scope}:${String(req.body?.email ?? '').trim().toLowerCase()}`;
+
 export const rateLimit = (
   maxRequests: number = 100,
   windowMs: number = 15 * 60 * 1000,
@@ -47,6 +61,7 @@ export const rateLimit = (
   }) as RateLimiter;
 
   limiter.reset = () => store.clear();
+  allLimiters.push(limiter);
 
   // Nettoyage périodique ; unref() pour ne pas empêcher le process (ou Jest) de se terminer
   setInterval(() => {
@@ -65,6 +80,12 @@ export const sensitiveRateLimit = rateLimit(10, 15 * 60 * 1000);
 
 // Général : 100 requêtes / 15 min
 export const generalRateLimit = rateLimit(100, 15 * 60 * 1000);
+
+// VULN-007 : 5 essais / 15 min sur un même compte, toutes IP confondues (brute force distribuée)
+export const loginAccountRateLimit = rateLimit(5, 15 * 60 * 1000, byTargetEmail('login'));
+
+// VULN-008 : 3 demandes de reset / heure pour un même email, toutes IP confondues (bombardement d'emails)
+export const passwordResetAccountRateLimit = rateLimit(3, 60 * 60 * 1000, byTargetEmail('reset'));
 
 // Création de ticket (déclenche un appel IA payant) : 10 / heure / utilisateur connecté
 export const ticketCreateRateLimit = rateLimit(10, 60 * 60 * 1000, (req) => `user:${req.userId ?? req.ip}`);

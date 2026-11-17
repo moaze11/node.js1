@@ -24,7 +24,13 @@ import {
   requireAdmin,
   requireAgent
 } from '../middlewares/auth.middleware';
-import { loginRateLimit, sensitiveRateLimit, ticketCreateRateLimit } from '../middlewares/rateLimit';
+import {
+  loginRateLimit,
+  loginAccountRateLimit,
+  passwordResetAccountRateLimit,
+  sensitiveRateLimit,
+  ticketCreateRateLimit
+} from '../middlewares/rateLimit';
 import { validate } from '../middlewares/validate';
 import { asyncHandler } from '../middlewares/errorHandler';
 import {
@@ -53,14 +59,20 @@ const router = Router();
 
 // Auth Routes (bootstrap SuperAdmin : refusé dès qu'un SuperAdmin existe)
 router.post('/auth/super-admin', sensitiveRateLimit, validate(SuperAdminSchema), createSuperAdmin);
-router.post('/auth/login', loginRateLimit, validate(LoginSchema), login);
+router.post('/auth/login', loginRateLimit, validate(LoginSchema), loginAccountRateLimit, login);
 router.post('/auth/refresh', validate(RefreshTokenSchema), refreshToken);
 router.post('/auth/logout', validate(LogoutSchema), logout);
 
 // Email Routes (invitation réservée aux admins : pas d'inscription publique)
 router.post('/auth/invite', authMiddleware, requireAdmin, validate(InviteSchema), inviteUser);
 router.post('/auth/accept-invitation', sensitiveRateLimit, validate(AcceptInvitationSchema), acceptInvitation);
-router.post('/auth/forgot-password', sensitiveRateLimit, validate(ForgotPasswordSchema), forgotPassword);
+router.post(
+  '/auth/forgot-password',
+  sensitiveRateLimit,
+  validate(ForgotPasswordSchema),
+  passwordResetAccountRateLimit,
+  forgotPassword
+);
 router.post('/auth/reset-password', sensitiveRateLimit, validate(ResetPasswordSchema), resetPassword);
 
 // User Routes

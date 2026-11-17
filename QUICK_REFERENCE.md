@@ -7,7 +7,7 @@ nvm use 20                  # toujours (Prisma ne marche pas sous Node 26)
 npm ci                      # installer
 npx prisma migrate deploy   # appliquer les migrations
 npm run dev                 # serveur http://localhost:3002
-npm test                    # 117 tests
+npm test                    # 139 tests
 npm run build && npm start  # version compilée
 npx prisma studio           # explorer la base
 ```
@@ -18,7 +18,7 @@ Swagger : **http://localhost:3002/api-docs**
 
 | Route | Accès | Corps / paramètres |
 |---|---|---|
-| `POST /auth/super-admin` | Public, une fois | `{email, password}` |
+| `POST /auth/super-admin` | En-tête `X-Bootstrap-Token`, une fois | `{email, password}` |
 | `POST /auth/login` | Public | `{email, password}` |
 | `POST /auth/refresh` | Public | `{refreshToken}` → nouveaux access + refresh |
 | `POST /auth/logout` | Public | `{refreshToken}` |

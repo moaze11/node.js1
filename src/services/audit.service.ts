@@ -57,3 +57,6 @@ export const logPasswordReset = (userId: number, ip?: string) => logAudit({ acti
 
 export const logFailedLogin = (email: string, ip?: string) =>
   logAudit({ action: 'FAILED_LOGIN', changes: { email }, ip });
+
+export const logRefreshTokenReuse = (userId: number, ip?: string) =>
+  logAudit({ action: 'REFRESH_TOKEN_REUSE', userId, ip });

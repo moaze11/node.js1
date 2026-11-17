@@ -21,7 +21,7 @@ npm run dev                  # http://localhost:3002
 
 - Documentation interactive : **http://localhost:3002/api-docs** (Swagger)
 - Santé du serveur : `GET /health`
-- Tests : `npm test` (117 tests, aucune base ni clé nécessaire)
+- Tests : `npm test` (139 tests, aucune base ni clé nécessaire)
 
 ### Variables d'environnement (`.env`)
 
@@ -33,7 +33,8 @@ npm run dev                  # http://localhost:3002
 | `APP_URL` | URL mise dans les liens des emails (défaut `http://localhost:3002`) |
 | `OPENAI_API_KEY` | Triage IA des tickets. Sans clé : les tickets sont créés sans réponse IA |
 | `OPENAI_MODEL` | Modèle utilisé (défaut `gpt-4o-mini`) |
-| `ALLOW_SUPERADMIN_BOOTSTRAP` | `true` pour ouvrir `/auth/super-admin` en production (premier déploiement uniquement) |
+| `SUPERADMIN_BOOTSTRAP_TOKEN` | Secret (32 caractères min.) qui ouvre `/auth/super-admin`, à envoyer dans l'en-tête `X-Bootstrap-Token`. Vide = route fermée. À retirer après la création du premier SuperAdmin (voir [VULN-001](audit/VULN-001-bootstrap-superadmin.md)) |
+| `ENABLE_API_DOCS` | `true` pour servir `/api-docs` en production (fermé par défaut quand `NODE_ENV=production`, voir [VULN-010](audit/VULN-010-swagger-public-entetes.md)) |
 
 Le `.env` n'est **jamais** commité (`.gitignore`). Seul `.env.example` (sans valeurs) l'est.
 
@@ -89,7 +90,7 @@ schéma JSON puis revalidée ; si OpenAI est en panne, le ticket est créé quan
 - **Erreurs centralisées** : format unique `{ error, statusCode }`, jamais de détail interne.
 - **Audit logs** en base : création de compte, changement de rôle (ancien → nouveau), désactivation, réactivation.
 - Login sans fuite d'information (même réponse si l'email n'existe pas), en-têtes HTTP de sécurité, `X-Powered-By` masqué.
-- **Tests** : 117 tests Jest + Supertest (auth, permissions, tickets, IA, emails, sécurité).
+- **Tests** : 139 tests Jest + Supertest (auth, permissions, tickets, IA, emails, sécurité).
 - **CI** GitHub Actions à chaque push : install → Prisma → typecheck → build → tests, sur Node 20 et 22.
 
 ---
@@ -98,7 +99,7 @@ schéma JSON puis revalidée ; si OpenAI est en panne, le ticket est créé quan
 
 | Méthode | Route | Accès |
 |---|---|---|
-| POST | `/auth/super-admin` | Public, une seule fois (fermé en production) |
+| POST | `/auth/super-admin` | Secret `X-Bootstrap-Token`, une seule fois |
 | POST | `/auth/login` | Public |
 | POST | `/auth/refresh` | Public (refresh token) |
 | POST | `/auth/logout` | Public (refresh token) |
@@ -120,7 +121,8 @@ schéma JSON puis revalidée ; si OpenAI est en panne, le ticket est créé quan
 | GET | `/tickets/:id/messages` | Connecté, si autorisé |
 | POST | `/tickets/:id/messages` | Propriétaire ou staff autorisé |
 | GET | `/agent/tickets` | Agent, Admin, SuperAdmin |
-| GET | `/health`, `/api-docs`, `/api-docs.json` | Public |
+| GET | `/health` | Public |
+| GET | `/api-docs`, `/api-docs.json` | Public hors production (sinon `ENABLE_API_DOCS=true`) |
 
 Détail des paramètres et réponses : **`/api-docs`**.
 
@@ -181,3 +183,4 @@ npx prisma studio   # explorer la base dans le navigateur
 - `QUICK_REFERENCE.md` : aide-mémoire des commandes
 - `CI_SETUP.md` : pipeline GitHub Actions
 - `POSTGRES_SETUP.md` : passage à PostgreSQL
+- `audit/` : audit de sécurité (10 vulnérabilités exploitées, corrigées et retestées)

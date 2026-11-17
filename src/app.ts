@@ -11,11 +11,20 @@ const app = express();
 // Ne pas annoncer la techno du serveur
 app.disable('x-powered-by');
 
-// En-têtes de sécurité de base
-app.use((_req, res, next) => {
+// VULN-010 : documentation interactive fermée en production, sauf ouverture explicite
+const apiDocsEnabled = process.env.NODE_ENV !== 'production' || process.env.ENABLE_API_DOCS === 'true';
+
+// En-têtes de sécurité
+app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  // VULN-010 : HTTPS imposé au navigateur pendant 1 an (ignoré tant que l'API est servie en HTTP)
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  // VULN-010 : l'API ne renvoie que du JSON, rien à exécuter. Swagger UI (scripts, styles) est exclu.
+  if (!req.path.startsWith('/api-docs')) {
+    res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  }
   next();
 });
 
@@ -23,9 +32,11 @@ app.use(express.json({ limit: '100kb' }));
 app.use(generalRateLimit);
 
 // Swagger documentation
-app.use('/api-docs', swaggerUi.serve);
-app.get('/api-docs', swaggerUi.setup(swaggerSpec));
-app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
+if (apiDocsEnabled) {
+  app.use('/api-docs', swaggerUi.serve);
+  app.get('/api-docs', swaggerUi.setup(swaggerSpec));
+  app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
+}
 
 // Health check
 app.get('/health', (_req, res) => {

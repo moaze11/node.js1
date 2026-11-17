@@ -25,15 +25,15 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     const token = authHeader.substring(7); // Remove "Bearer "
     const payload = verifyAccessToken(token);
 
-    if (!payload || typeof payload.userId !== 'number') {
+    if (!payload || typeof payload.userId !== 'number' || typeof payload.sid !== 'number') {
       return res.status(401).json({ error: 'Invalid or expired access token' });
     }
 
-    // Rôle et statut lus en base (pas dans le token) : une désactivation ou un
-    // changement de rôle prend effet immédiatement.
-    const sessionUser = await getSessionUser(payload.userId);
+    // Rôle, statut et session lus en base (pas dans le token) : une désactivation, un changement
+    // de rôle ou une déconnexion (VULN-002) prennent effet immédiatement.
+    const sessionUser = await getSessionUser(payload.userId, payload.sid);
     if (!sessionUser) {
-      return res.status(401).json({ error: 'Account disabled or not found' });
+      return res.status(401).json({ error: 'Session revoked, account disabled or not found' });
     }
 
     req.userId = payload.userId;

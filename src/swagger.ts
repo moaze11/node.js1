@@ -62,7 +62,11 @@ const swaggerEndpoints: Record<string, any> = {
   '/auth/super-admin': {
     post: {
       summary: 'Create Super Admin (one-time)',
+      description: 'Closed unless SUPERADMIN_BOOTSTRAP_TOKEN (32+ chars) is set on the server and sent in X-Bootstrap-Token.',
       tags: ['Auth'],
+      parameters: [
+        { name: 'X-Bootstrap-Token', in: 'header', required: true, schema: { type: 'string' } }
+      ],
       requestBody: {
         required: true,
         content: {
@@ -79,7 +83,9 @@ const swaggerEndpoints: Record<string, any> = {
       },
       responses: {
         201: { description: 'Super Admin created' },
-        400: { description: 'Invalid input' }
+        400: { description: 'Invalid input or SuperAdmin already exists' },
+        403: { description: 'Bootstrap disabled or wrong token' },
+        409: { description: 'Bootstrap already in progress' }
       }
     }
   },

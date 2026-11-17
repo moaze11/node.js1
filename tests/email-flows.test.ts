@@ -1,8 +1,8 @@
 import request from 'supertest';
 import { prismaMock, resetPrismaMock } from './helpers/prismaMock';
-import { generateAccessToken, comparePassword } from '../src/utils';
+import { generateAccessToken, comparePassword, hashToken } from '../src/utils';
 import app from '../src/app';
-import { loginRateLimit, sensitiveRateLimit, generalRateLimit } from '../src/middlewares/rateLimit';
+import { resetAllRateLimits } from '../src/middlewares/rateLimit';
 import { sendInvitationEmail, sendPasswordResetEmail } from '../src/services/email.service';
 
 jest.mock('../src/services/session.service', () => jest.requireActual('./helpers/sessionMock'));
@@ -16,7 +16,7 @@ jest.mock('../src/services/email.service', () => ({
   sendWelcomeEmail: jest.fn().mockResolvedValue(true)
 }));
 
-const ADMIN = `Bearer ${generateAccessToken({ userId: 2, email: 'admin@test.com', role: 'Admin' })}`;
+const ADMIN = `Bearer ${generateAccessToken({ userId: 2, email: 'admin@test.com', role: 'Admin', sid: 1 })}`;
 const inFuture = () => new Date(Date.now() + 60 * 60 * 1000);
 const inPast = () => new Date(Date.now() - 1000);
 
@@ -24,10 +24,11 @@ beforeEach(() => {
   resetPrismaMock();
   (sendInvitationEmail as jest.Mock).mockClear();
   (sendPasswordResetEmail as jest.Mock).mockClear();
-  loginRateLimit.reset();
-  sensitiveRateLimit.reset();
-  generalRateLimit.reset();
+  resetAllRateLimits();
 });
+
+// forgot-password répond AVANT de traiter la demande (VULN-006) : on laisse le traitement finir
+const afterResponse = () => new Promise((resolve) => setImmediate(resolve));
 
 describe('Invitations', () => {
   it('an Admin invites a new user: invitation stored and email sent', async () => {
@@ -40,10 +41,12 @@ describe('Invitations', () => {
     expect(res.status).toBe(201);
     const stored = prismaMock.invitation.create.mock.calls[0][0].data;
     expect(stored.email).toBe('new@test.com');
-    expect(stored.token).toEqual(expect.any(String));
-    expect(stored.token.length).toBeGreaterThanOrEqual(32);
     expect(stored.expiresAt.getTime()).toBeGreaterThan(Date.now());
-    expect(sendInvitationEmail).toHaveBeenCalledWith('new@test.com', stored.token);
+    // VULN-004 : le token part par email, seule son empreinte est stockée
+    const emailed = (sendInvitationEmail as jest.Mock).mock.calls[0][1];
+    expect(emailed.length).toBeGreaterThanOrEqual(32);
+    expect(stored.token).toBe(hashToken(emailed));
+    expect(stored.token).not.toBe(emailed);
   });
 
   it('cannot invite an email that already has an account', async () => {
@@ -105,12 +108,32 @@ describe('Password reset', () => {
     prismaMock.passwordReset.create.mockResolvedValue({});
 
     const res = await request(app).post('/auth/forgot-password').send({ email: 'user@test.com' });
+    await afterResponse();
 
     expect(res.status).toBe(200);
     const stored = prismaMock.passwordReset.create.mock.calls[0][0].data;
     expect(stored.userId).toBe(10);
     expect(stored.expiresAt.getTime()).toBeGreaterThan(Date.now());
-    expect(sendPasswordResetEmail).toHaveBeenCalledWith('user@test.com', stored.token);
+    // VULN-004 : le lien envoyé contient le token, la base seulement son empreinte
+    const emailed = (sendPasswordResetEmail as jest.Mock).mock.calls[0][1];
+    expect(sendPasswordResetEmail).toHaveBeenCalledWith('user@test.com', emailed);
+    expect(stored.token).toBe(hashToken(emailed));
+  });
+
+  it('VULN-008: a new reset request invalidates the previous links', async () => {
+    prismaMock.user.findUnique.mockResolvedValue({ id: 10, email: 'user@test.com', isActive: true });
+    prismaMock.passwordReset.create.mockResolvedValue({});
+
+    await request(app).post('/auth/forgot-password').send({ email: 'user@test.com' });
+    await afterResponse();
+
+    expect(prismaMock.passwordReset.updateMany).toHaveBeenCalledWith({
+      where: { userId: 10, usedAt: null },
+      data: { usedAt: expect.any(Date) }
+    });
+    const invalidated = prismaMock.passwordReset.updateMany.mock.invocationCallOrder[0];
+    const created = prismaMock.passwordReset.create.mock.invocationCallOrder[0];
+    expect(invalidated).toBeLessThan(created);
   });
 
   it('does not reveal whether an email exists (same response)', async () => {
@@ -118,8 +141,11 @@ describe('Password reset', () => {
     prismaMock.passwordReset.create.mockResolvedValue({});
     const known = await request(app).post('/auth/forgot-password').send({ email: 'user@test.com' });
 
+    await afterResponse();
+
     prismaMock.user.findUnique.mockResolvedValueOnce(null);
     const unknown = await request(app).post('/auth/forgot-password').send({ email: 'ghost@test.com' });
+    await afterResponse();
 
     expect(unknown.status).toBe(known.status);
     expect(unknown.body).toEqual(known.body);
@@ -143,10 +169,15 @@ describe('Password reset', () => {
     });
     const newHash = prismaMock.user.update.mock.calls[0][0].data.password;
     expect(await comparePassword('NewPassword123', newHash)).toBe(true);
+    expect(prismaMock.passwordReset.findUnique).toHaveBeenCalledWith({ where: { token: hashToken('tok') } });
     expect(prismaMock.refreshToken.updateMany).toHaveBeenCalledWith({
       where: { userId: 10, revokedAt: null },
       data: { revokedAt: expect.any(Date) }
     });
+    // VULN-005 : le reset apparaît dans le journal d'audit
+    expect(prismaMock.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ action: 'PASSWORD_RESET', actorId: 10 }) })
+    );
   });
 
   it.each([
